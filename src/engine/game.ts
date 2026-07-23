@@ -5,7 +5,6 @@ import { calculateScore } from './scoring';
 import { AIContext } from './ai';
 import { predictBid } from './ai-tf/bidding-model';
 import { predictCard } from './ai-tf/cardplay-model';
-import { recordBidSample, recordPlaySample } from './ai-tf/training';
 
 const PLAYER_NAMES = ['You', 'Mike', 'Lisa', 'Bill'];
 const PLAYER_POSITIONS = ['bottom', 'right', 'top', 'left'] as const;
@@ -34,6 +33,7 @@ export function createInitialState(): GameState {
     currentTrick: { cards: [], leadSuit: null, winnerId: null },
     tricksPlayed: 0,
     trickJustResolved: false,
+    trickWinners: [],
     scoreHistory: [[], [], [], []],
     message: 'Click Deal to start the game.',
   };
@@ -109,6 +109,7 @@ export function startRound(state: GameState): GameState {
     flippedCard,
     currentTrick: { cards: [], leadSuit: null, winnerId: null },
     tricksPlayed: 0,
+    trickWinners: [],
     message,
   };
 }
@@ -220,6 +221,7 @@ export function handleTrickPause(state: GameState): GameState {
     currentTrick: { cards: [], leadSuit: null, winnerId: null },
     tricksPlayed,
     trickJustResolved: true,
+    trickWinners: [...state.trickWinners, winnerId ?? -1],
     message: winnerId !== null
       ? `${state.players[winnerId].name} won the trick!`
       : '',
@@ -258,7 +260,7 @@ export function handleContinueRound(state: GameState): GameState {
   return startRound(state);
 }
 
-function buildAIContext(state: GameState, playerIndex: number): AIContext {
+export function buildAIContext(state: GameState, playerIndex: number): AIContext {
   const player = state.players[playerIndex];
 
   const cardsPlayed: Card[] = [];
@@ -303,14 +305,6 @@ export function handleAIPlayer(state: GameState): GameState {
     const player = state.players[state.currentPlayerIndex];
     const ctx = buildAIContext(state, state.currentPlayerIndex);
     const bid = predictBid(player.hand, ctx);
-
-    recordBidSample(
-      player.hand, state.trumpSuit,
-      collectAllCardsPlayed(state), state.cardsPerPlayer,
-      state.tricksPlayed, state.players.map(p => p.bid),
-      state.currentPlayerIndex, bid, state.round
-    );
-
     return handleBid(state, bid);
   }
 
@@ -318,21 +312,13 @@ export function handleAIPlayer(state: GameState): GameState {
     const player = state.players[state.currentPlayerIndex];
     const ctx = buildAIContext(state, state.currentPlayerIndex);
     const card = predictCard(player.hand, state.currentTrick, ctx);
-
-    recordPlaySample(
-      player.hand, state.currentTrick, state.trumpSuit,
-      collectAllCardsPlayed(state), state.tricksPlayed, state.cardsPerPlayer,
-      ctx.bid, ctx.tricksWon, ctx.allBids, ctx.allTricksWon,
-      state.currentPlayerIndex, card, state.round
-    );
-
     return handlePlayCard(state, card);
   }
 
   return state;
 }
 
-function collectAllCardsPlayed(state: GameState): Card[] {
+export function collectAllCardsPlayed(state: GameState): Card[] {
   const cardsPlayed: Card[] = [];
   for (const p of state.players) {
     for (const trick of p.tricks) {

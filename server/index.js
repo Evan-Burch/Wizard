@@ -29,7 +29,7 @@ function readTrainingData() {
 function writeTrainingData(data) {
   ensureDataDir();
   const tmp = TRAINING_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data), 'utf-8');
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
   fs.renameSync(tmp, TRAINING_FILE);
 }
 
@@ -47,33 +47,44 @@ app.post('/api/training-data', (req, res) => {
   }
 });
 
-// Model storage (IndexedDB replacement — not currently used, reserved for future)
+app.delete('/api/training-data', (req, res) => {
+  try {
+    const empty = { bidSamples: [], playSamples: [], totalGamesPlayed: 0 };
+    writeTrainingData(empty);
+
+    const modelsDir = path.join(DATA_DIR, 'models');
+    if (fs.existsSync(modelsDir)) {
+      for (const f of fs.readdirSync(modelsDir)) {
+        fs.unlinkSync(path.join(modelsDir, f));
+      }
+      fs.rmdirSync(modelsDir);
+    }
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Model storage
 app.get('/api/models/:name', (req, res) => {
-  const modelDir = path.join(DATA_DIR, 'models', req.params.name);
-  const metaPath = path.join(modelDir, 'model.json');
-  if (!fs.existsSync(metaPath)) {
+  const modelFile = path.join(DATA_DIR, 'models', req.params.name + '.json');
+  if (!fs.existsSync(modelFile)) {
     return res.status(404).json({ error: 'model not found' });
   }
-  const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-  const weightsPath = path.join(modelDir, 'model.weights.bin');
-  if (fs.existsSync(weightsPath)) {
-    meta.weightsManifest[0].paths = [`${req.params.name}/model.weights.bin`];
-  }
-  res.json(meta);
+  res.json(JSON.parse(fs.readFileSync(modelFile, 'utf-8')));
 });
 
 app.post('/api/models/:name', (req, res) => {
   try {
-    const modelDir = path.join(DATA_DIR, 'models', req.params.name);
+    const modelsDir = path.join(DATA_DIR, 'models');
     ensureDataDir();
-    fs.mkdirSync(modelDir, { recursive: true });
+    fs.mkdirSync(modelsDir, { recursive: true });
 
-    const { topology, weights } = req.body;
-    fs.writeFileSync(path.join(modelDir, 'model.json'), JSON.stringify(topology), 'utf-8');
-    if (weights) {
-      const buf = Buffer.from(weights, 'base64');
-      fs.writeFileSync(path.join(modelDir, 'model.weights.bin'), buf);
-    }
+    const modelFile = path.join(modelsDir, req.params.name + '.json');
+    const tmp = modelFile + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(req.body), 'utf-8');
+    fs.renameSync(tmp, modelFile);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

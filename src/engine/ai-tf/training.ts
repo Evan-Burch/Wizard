@@ -6,10 +6,17 @@ let trainingStore: TrainingDataStore = { bidSamples: [], playSamples: [], totalG
 
 export async function initTrainingStore(): Promise<void> {
   trainingStore = await loadTrainingData();
+  window.addEventListener('beforeunload', () => {
+    saveTrainingData(trainingStore);
+  });
 }
 
 export function getTrainingStore(): TrainingDataStore {
   return trainingStore;
+}
+
+export function clearTrainingStore(): void {
+  trainingStore = { bidSamples: [], playSamples: [], totalGamesPlayed: 0 };
 }
 
 export function recordBidSample(
@@ -22,6 +29,7 @@ export function recordBidSample(
   playerIndex: number,
   actualBid: number,
   round: number,
+  isHuman: boolean,
 ): void {
   const features = encodeBiddingInput(
     hand, trumpSuit, cardsPlayed, cardsPerPlayer, tricksPlayed, allBids, playerIndex
@@ -35,13 +43,11 @@ export function recordBidSample(
     labels: label,
     timestamp: Date.now(),
     gameRound: round,
+    isHuman,
+    playerIndex,
   });
 
   pruneIfNeeded(trainingStore);
-
-  if (trainingStore.bidSamples.length % 50 === 0) {
-    saveTrainingData(trainingStore);
-  }
 }
 
 export function recordPlaySample(
@@ -58,6 +64,8 @@ export function recordPlaySample(
   playerIndex: number,
   chosenCard: Card,
   round: number,
+  isHuman: boolean,
+  trickIndex?: number,
 ): void {
   const features = encodePlayInput(
     hand, trick, trumpSuit, cardsPlayed, tricksPlayed, cardsPerPlayer,
@@ -78,13 +86,15 @@ export function recordPlaySample(
     labels,
     timestamp: Date.now(),
     gameRound: round,
+    isHuman,
+    playerIndex,
+    trickIndex,
+    tricksWonBefore: tricksWon,
+    handCardIds: hand.map(c => c.id),
+    trickCardIds: trick.cards.map(tc => tc.card.id),
   });
 
   pruneIfNeeded(trainingStore);
-
-  if (trainingStore.playSamples.length % 100 === 0) {
-    saveTrainingData(trainingStore);
-  }
 }
 
 export function flushTrainingData(): void {

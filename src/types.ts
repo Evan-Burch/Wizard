@@ -58,6 +58,7 @@ export interface GameState {
   currentTrick: Trick;
   tricksPlayed: number;
   trickJustResolved: boolean;
+  trickWinners: number[];
   scoreHistory: RoundScore[][];
   message: string;
 }

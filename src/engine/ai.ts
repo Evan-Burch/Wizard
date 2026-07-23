@@ -25,7 +25,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function calculateInitialScores(hand: Card[], trumpSuit: Suit | null): Map<string, number> {
+export function calculateInitialScores(hand: Card[], trumpSuit: Suit | null): Map<string, number> {
   const scores = new Map<string, number>();
 
   const trumpCards = hand.filter(c => c.suit === trumpSuit && !c.special);
@@ -90,7 +90,7 @@ function calculateInitialScores(hand: Card[], trumpSuit: Suit | null): Map<strin
   return scores;
 }
 
-function reevaluateScores(
+export function reevaluateScores(
   initialScores: Map<string, number>,
   hand: Card[],
   cardsPlayed: Card[],
@@ -141,7 +141,7 @@ function reevaluateScores(
   return currentScores;
 }
 
-function wouldWinCard(card: Card, trick: Trick, ctx: AIContext): boolean {
+export function wouldWinCard(card: Card, trick: Trick, ctx: AIContext): boolean {
   if (trick.cards.length === 0) return true;
   if (card.special === 'wizard') {
     const wizardAlreadyPlayed = trick.cards.some(c => c.card.special === 'wizard');
@@ -367,7 +367,7 @@ function selectFollowCard(
   return allScored[0].card;
 }
 
-function getCardsRemainingInSuit(suit: Suit, ctx: AIContext): number {
+export function getCardsRemainingInSuit(suit: Suit, ctx: AIContext): number {
   const totalInDeck = suit === ctx.trumpSuit ? 14 : 13;
   const played = ctx.cardsPlayed.filter(c => c.suit === suit && !c.special).length;
   const inHand = ctx.hand.filter(c => c.suit === suit && !c.special).length;

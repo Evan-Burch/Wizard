@@ -78,10 +78,14 @@ export function determineAIPhase(_playerIndex: number): { phase: AIPhase; confid
 }
 
 export async function trainAfterRound(): Promise<void> {
-  if (isTraining || !modelsReady) return;
+  if (isTraining || !modelsReady) {
+    flushTrainingData();
+    return;
+  }
 
   const store = getTrainingStore();
   if (store.bidSamples.length < MIN_SAMPLES_TO_TRAIN && store.playSamples.length < MIN_SAMPLES_TO_TRAIN) {
+    flushTrainingData();
     return;
   }
 
@@ -95,13 +99,16 @@ export async function trainAfterRound(): Promise<void> {
     if (store.bidSamples.length >= MIN_SAMPLES_TO_TRAIN && biddingModel) {
       const bidFeatures = store.bidSamples.map(s => s.features);
       const bidLabels = store.bidSamples.map(s => s.labels);
+      const bidWeights = store.bidSamples.map(s => s.isHuman ? 1.0 : (0.1 + 0.9 * Math.max(0, s.reward ?? 0)));
 
       const xTensor = tf.tensor2d(bidFeatures);
       const yTensor = tf.tensor2d(bidLabels);
+      const wTensor = tf.tensor1d(bidWeights);
 
       const splitIdx = Math.floor(xTensor.shape[0] * 0.8);
       const xTrain = xTensor.slice([0, 0], [splitIdx, -1]);
       const yTrain = yTensor.slice([0, 0], [splitIdx, -1]);
+      const wTrain = wTensor.slice([0], [splitIdx]);
       const xVal = xTensor.slice([splitIdx, 0]);
       const yVal = yTensor.slice([splitIdx, 0]);
 
@@ -109,6 +116,7 @@ export async function trainAfterRound(): Promise<void> {
         epochs: TRAINING_EPOCHS,
         batchSize: BATCH_SIZE,
         validationData: [xVal, yVal],
+        sampleWeight: wTrain,
         shuffle: true,
         callbacks: {
           onEpochEnd: async (epoch) => {
@@ -119,7 +127,7 @@ export async function trainAfterRound(): Promise<void> {
         },
       });
 
-      tf.dispose([xTensor, yTensor, xTrain, yTrain, xVal, yVal]);
+      tf.dispose([xTensor, yTensor, xTrain, yTrain, xVal, yVal, wTensor]);
       await saveBiddingModel(biddingModel);
     }
 
@@ -128,13 +136,16 @@ export async function trainAfterRound(): Promise<void> {
     if (store.playSamples.length >= MIN_SAMPLES_TO_TRAIN && cardPlayModel) {
       const playFeatures = store.playSamples.map(s => s.features);
       const playLabels = store.playSamples.map(s => s.labels);
+      const playWeights = store.playSamples.map(s => s.isHuman ? 1.0 : (0.1 + 0.9 * Math.max(0, s.reward ?? 0)));
 
       const xTensor = tf.tensor2d(playFeatures);
       const yTensor = tf.tensor2d(playLabels);
+      const wTensor = tf.tensor1d(playWeights);
 
       const splitIdx = Math.floor(xTensor.shape[0] * 0.8);
       const xTrain = xTensor.slice([0, 0], [splitIdx, -1]);
       const yTrain = yTensor.slice([0, 0], [splitIdx, -1]);
+      const wTrain = wTensor.slice([0], [splitIdx]);
       const xVal = xTensor.slice([splitIdx, 0]);
       const yVal = yTensor.slice([splitIdx, 0]);
 
@@ -142,6 +153,7 @@ export async function trainAfterRound(): Promise<void> {
         epochs: TRAINING_EPOCHS,
         batchSize: BATCH_SIZE,
         validationData: [xVal, yVal],
+        sampleWeight: wTrain,
         shuffle: true,
         callbacks: {
           onEpochEnd: async (epoch) => {
@@ -152,7 +164,7 @@ export async function trainAfterRound(): Promise<void> {
         },
       });
 
-      tf.dispose([xTensor, yTensor, xTrain, yTrain, xVal, yVal]);
+      tf.dispose([xTensor, yTensor, xTrain, yTrain, xVal, yVal, wTensor]);
       await saveCardPlayModel(cardPlayModel);
     }
 

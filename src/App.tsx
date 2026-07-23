@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useCallback, useState } from 'react';
+import { useReducer, useEffect, useCallback, useState, useRef } from 'react';
 import {
   createInitialState,
   startRound,
@@ -8,7 +8,14 @@ import {
   handleTrickPause,
   handleAIPlayer,
   handleContinueRound,
+  buildAIContext,
+  collectAllCardsPlayed,
 } from './engine/game';
+import { predictBid } from './engine/ai-tf/bidding-model';
+import { predictCard } from './engine/ai-tf/cardplay-model';
+import { recordBidSample, recordPlaySample, getTrainingStore, clearTrainingStore, flushTrainingData } from './engine/ai-tf/training';
+import { resetTrainingData, TrainingDataStore } from './engine/ai-tf/storage';
+import { assignRoundRewards } from './engine/rewards';
 import { canPlayCard } from './engine/wizard';
 import { Hand } from './components/Hand';
 import { Player } from './components/Player';
@@ -19,10 +26,16 @@ import { BidSelector } from './components/BidSelector';
 import { Scoreboard } from './components/Scoreboard';
 import { PersistentScoreboard } from './components/PersistentScoreboard';
 import { TrainingBadge } from './components/TrainingBadge';
+import { DataInfoDialog } from './components/DataInfoDialog';
 import { initializeModels, trainAfterRound, onTrainingStatusChange, determineAIPhase, TrainingStatus } from './engine/ai-tf/pipeline';
 import wizardImg from './assets/wizard.png';
 import jesterImg from './assets/jester.png';
 import './index.css';
+
+type PendingRecording =
+  | { type: 'bid'; isHuman: boolean; hand: import('./types').Card[]; trumpSuit: import('./types').Suit | null; cardsPlayed: import('./types').Card[]; cardsPerPlayer: number; tricksPlayed: number; allBids: (number | null)[]; playerIndex: number; bid: number; round: number }
+  | { type: 'play'; isHuman: boolean; hand: import('./types').Card[]; trick: import('./types').Trick; trumpSuit: import('./types').Suit | null; cardsPlayed: import('./types').Card[]; tricksPlayed: number; cardsPerPlayer: number; bid: number; tricksWon: number; allBids: (number | null)[]; allTricksWon: number[]; playerIndex: number; card: import('./types').Card; round: number }
+  | null;
 
 function MiniCardFace({ card }: { card: import('./types').Card }) {
   if (card.special === 'wizard') {
@@ -46,6 +59,9 @@ function App() {
   const [trainingStatus, setTrainingStatus] = useState<TrainingStatus>('loading');
   const [trainingProgress, setTrainingProgress] = useState(0);
   const [aiPhases, setAiPhases] = useState<Record<number, { phase: 'neural' | 'rule-based' | 'shadow'; confidence: number }>>({});
+  const pendingRecording = useRef<PendingRecording>(null);
+  const [dataInfoOpen, setDataInfoOpen] = useState(false);
+  const [dataInfoStore, setDataInfoStore] = useState<TrainingDataStore>({ bidSamples: [], playSamples: [], totalGamesPlayed: 0 });
 
   useEffect(() => {
     initializeModels();
@@ -60,12 +76,59 @@ function App() {
       switch (action.type) {
         case 'DEAL': return startRound(s);
         case 'SELECT_TRUMP': return handleSelectTrump(s, action.payload as import('./types').Suit);
-        case 'BID': return handleBid(s, action.payload as number);
-        case 'PLAY': return handlePlayCard(s, action.payload as import('./types').Card);
+        case 'BID': {
+          const bid = action.payload as number;
+          const player = s.players[s.currentPlayerIndex];
+          if (player.isHuman) {
+            pendingRecording.current = {
+              type: 'bid',
+              isHuman: true,
+              hand: player.hand,
+              trumpSuit: s.trumpSuit,
+              cardsPlayed: collectAllCardsPlayed(s),
+              cardsPerPlayer: s.cardsPerPlayer,
+              tricksPlayed: s.tricksPlayed,
+              allBids: s.players.map(p => p.bid),
+              playerIndex: s.currentPlayerIndex,
+              bid,
+              round: s.round,
+            };
+          }
+          return handleBid(s, bid);
+        }
+        case 'PLAY': {
+          const card = action.payload as import('./types').Card;
+          const player = s.players[s.currentPlayerIndex];
+          if (player.isHuman) {
+            const ctx = buildAIContext(s, s.currentPlayerIndex);
+            pendingRecording.current = {
+              type: 'play',
+              isHuman: true,
+              hand: player.hand,
+              trick: s.currentTrick,
+              trumpSuit: s.trumpSuit,
+              cardsPlayed: collectAllCardsPlayed(s),
+              tricksPlayed: s.tricksPlayed,
+              cardsPerPlayer: s.cardsPerPlayer,
+              bid: ctx.bid,
+              tricksWon: ctx.tricksWon,
+              allBids: ctx.allBids,
+              allTricksWon: ctx.allTricksWon,
+              playerIndex: s.currentPlayerIndex,
+              card,
+              round: s.round,
+            };
+          }
+          return handlePlayCard(s, card);
+        }
         case 'AI': return handleAIPlayer(s);
         case 'TRICK_PAUSE_DONE': return handleTrickPause(s);
         case 'CLEAR_DELAY': return { ...s, trickJustResolved: false };
-        case 'CONTINUE': setScoreboardMinimized(false); trainAfterRound(); return handleContinueRound(s);
+        case 'CONTINUE': {
+          setScoreboardMinimized(false);
+          trainAfterRound();
+          return handleContinueRound(s);
+        }
         case 'RESET': return createInitialState();
         default: return s;
       }
@@ -83,6 +146,8 @@ function App() {
   useEffect(() => {
     if (state.phase === 'scoring') {
       setScoreboardMinimized(false);
+      assignRoundRewards(state, getTrainingStore());
+      flushTrainingData();
     }
   }, [state.phase]);
 
@@ -104,12 +169,73 @@ function App() {
             ...prev,
             [cp.id]: determineAIPhase(cp.id),
           }));
+
+          if (state.phase === 'bidding') {
+            const ctx = buildAIContext(state, state.currentPlayerIndex);
+            const bid = predictBid(cp.hand, ctx);
+            pendingRecording.current = {
+              type: 'bid',
+              isHuman: false,
+              hand: cp.hand,
+              trumpSuit: state.trumpSuit,
+              cardsPlayed: collectAllCardsPlayed(state),
+              cardsPerPlayer: state.cardsPerPlayer,
+              tricksPlayed: state.tricksPlayed,
+              allBids: state.players.map(p => p.bid),
+              playerIndex: state.currentPlayerIndex,
+              bid,
+              round: state.round,
+            };
+          } else if (state.phase === 'playing') {
+            const ctx = buildAIContext(state, state.currentPlayerIndex);
+            const card = predictCard(cp.hand, state.currentTrick, ctx);
+            pendingRecording.current = {
+              type: 'play',
+              isHuman: false,
+              hand: cp.hand,
+              trick: state.currentTrick,
+              trumpSuit: state.trumpSuit,
+              cardsPlayed: collectAllCardsPlayed(state),
+              tricksPlayed: state.tricksPlayed,
+              cardsPerPlayer: state.cardsPerPlayer,
+              bid: ctx.bid,
+              tricksWon: ctx.tricksWon,
+              allBids: ctx.allBids,
+              allTricksWon: ctx.allTricksWon,
+              playerIndex: state.currentPlayerIndex,
+              card,
+              round: state.round,
+            };
+          }
         }
         dispatch({ type: 'AI' });
       }, 800);
       return () => clearTimeout(timer);
     }
   }, [isAITurn, shouldDelayAI, state.currentPlayerIndex, state.phase]);
+
+  useEffect(() => {
+    const recording = pendingRecording.current;
+    if (recording) {
+      pendingRecording.current = null;
+      if (recording.type === 'bid') {
+        recordBidSample(
+          recording.hand, recording.trumpSuit,
+          recording.cardsPlayed, recording.cardsPerPlayer,
+          recording.tricksPlayed, recording.allBids,
+          recording.playerIndex, recording.bid, recording.round, recording.isHuman
+        );
+      } else {
+        recordPlaySample(
+          recording.hand, recording.trick, recording.trumpSuit,
+          recording.cardsPlayed, recording.tricksPlayed, recording.cardsPerPlayer,
+          recording.bid, recording.tricksWon, recording.allBids, recording.allTricksWon,
+          recording.playerIndex, recording.card, recording.round,
+          recording.isHuman, recording.tricksPlayed
+        );
+      }
+    }
+  }, [state]);
 
   useEffect(() => {
     if (shouldDelayAI) {
@@ -142,6 +268,19 @@ function App() {
     state.players.map(p => [p.id, p.position])
   ) as Record<number, import('./types').PlayerPosition>;
 
+  const handleResetData = useCallback(async () => {
+    await resetTrainingData();
+    clearTrainingStore();
+    setDataInfoStore({ bidSamples: [], playSamples: [], totalGamesPlayed: 0 });
+    window.location.reload();
+  }, []);
+
+  useEffect(() => {
+    if (dataInfoOpen) {
+      setDataInfoStore(getTrainingStore());
+    }
+  }, [dataInfoOpen]);
+
   return (
     <div className="game-table">
       <div className="game-header">
@@ -155,6 +294,15 @@ function App() {
           )}
         </div>
       </div>
+
+      <button className="data-info-btn" onClick={() => setDataInfoOpen(true)}>i</button>
+
+      <DataInfoDialog
+        isOpen={dataInfoOpen}
+        onClose={() => setDataInfoOpen(false)}
+        store={dataInfoStore}
+        onReset={handleResetData}
+      />
 
       <TrumpIndicator trumpSuit={state.trumpSuit} flippedCard={state.flippedCard} />
 

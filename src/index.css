@@ -481,7 +481,7 @@ body {
 /* Training Badge */
 .training-badge {
   position: absolute;
-  bottom: 50px;
+  bottom: 140px;
   right: 10px;
   display: flex;
   align-items: center;
@@ -1006,4 +1006,135 @@ body {
   height: 100%;
   object-fit: cover;
   border-radius: 2px;
+}
+
+/* Data Info Dialog */
+.data-info-btn {
+  position: absolute;
+  top: 50px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.data-info-btn:hover {
+  background: rgba(0, 0, 0, 0.8);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.data-info-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.data-info-dialog {
+  background: #1a1a2e;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  padding: 20px;
+  min-width: 260px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.data-info-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.data-info-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #ffd700;
+}
+
+.data-info-close {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.data-info-close:hover {
+  background: rgba(255, 100, 100, 0.4);
+}
+
+.data-info-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.data-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.data-info-subrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 0 2px 16px;
+  font-size: 12px;
+}
+
+.data-info-label {
+  opacity: 0.8;
+}
+
+.data-info-value {
+  font-weight: bold;
+  color: #ffd700;
+}
+
+.data-info-divider {
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  margin: 4px 0;
+}
+
+.data-info-reset-btn {
+  width: 100%;
+  padding: 8px 0;
+  margin-top: 4px;
+  border: 1px solid rgba(244, 67, 54, 0.5);
+  border-radius: 6px;
+  background: rgba(244, 67, 54, 0.15);
+  color: #f44336;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.data-info-reset-btn:hover {
+  background: rgba(244, 67, 54, 0.3);
+  border-color: #f44336;
 }
