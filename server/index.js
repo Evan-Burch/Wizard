@@ -17,6 +17,7 @@ async function initDb() {
     console.log('[wizard-server] No DATABASE_URL — using filesystem fallback');
     return;
   }
+  console.log('[wizard-server] Connecting to Neon Postgres...');
   pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
   await pool.query(`
     CREATE TABLE IF NOT EXISTS kv_store (
@@ -96,40 +97,54 @@ async function kvDeleteAll() {
 // --- Training data endpoints ---
 
 app.get('/api/training-data', async (req, res) => {
+  const mode = pool ? 'neon' : 'filesystem';
   try {
     if (pool) {
       const data = await kvGet('training-data');
-      res.json(data || { bidSamples: [], playSamples: [], totalGamesPlayed: 0 });
+      const d = data || { bidSamples: [], playSamples: [], totalGamesPlayed: 0 };
+      console.log(`[GET /api/training-data] mode=${mode} bids=${d.bidSamples.length} plays=${d.playSamples.length} games=${d.totalGamesPlayed}`);
+      res.json(d);
     } else {
-      res.json(readTrainingDataFs());
+      const d = readTrainingDataFs();
+      console.log(`[GET /api/training-data] mode=${mode} bids=${d.bidSamples.length} plays=${d.playSamples.length}`);
+      res.json(d);
     }
   } catch (e) {
+    console.error(`[GET /api/training-data] ERROR mode=${mode}: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
 
 app.post('/api/training-data', async (req, res) => {
+  const mode = pool ? 'neon' : 'filesystem';
   try {
+    const bids = req.body.bidSamples?.length ?? 0;
+    const plays = req.body.playSamples?.length ?? 0;
     if (pool) {
       await kvSet('training-data', req.body);
     } else {
       writeTrainingDataFs(req.body);
     }
+    console.log(`[POST /api/training-data] mode=${mode} saved bids=${bids} plays=${plays}`);
     res.json({ ok: true });
   } catch (e) {
+    console.error(`[POST /api/training-data] ERROR mode=${mode}: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
 
 app.delete('/api/training-data', async (req, res) => {
+  const mode = pool ? 'neon' : 'filesystem';
   try {
     if (pool) {
       await kvDeleteAll();
     } else {
       deleteAllFs();
     }
+    console.log(`[DELETE /api/training-data] mode=${mode} cleared`);
     res.json({ ok: true });
   } catch (e) {
+    console.error(`[DELETE /api/training-data] ERROR mode=${mode}: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -137,30 +152,38 @@ app.delete('/api/training-data', async (req, res) => {
 // --- Model endpoints ---
 
 app.get('/api/models/:name', async (req, res) => {
+  const mode = pool ? 'neon' : 'filesystem';
   try {
     if (pool) {
       const data = await kvGet('model:' + req.params.name);
+      console.log(`[GET /api/models/${req.params.name}] mode=${mode} found=${!!data}`);
       if (!data) return res.status(404).json({ error: 'model not found' });
       res.json(data);
     } else {
       const data = readModelFs(req.params.name);
+      console.log(`[GET /api/models/${req.params.name}] mode=${mode} found=${!!data}`);
       if (!data) return res.status(404).json({ error: 'model not found' });
       res.json(data);
     }
   } catch (e) {
+    console.error(`[GET /api/models/${req.params.name}] ERROR mode=${mode}: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
 
 app.post('/api/models/:name', async (req, res) => {
+  const mode = pool ? 'neon' : 'filesystem';
   try {
+    const size = JSON.stringify(req.body).length;
     if (pool) {
       await kvSet('model:' + req.params.name, req.body);
     } else {
       writeModelFs(req.params.name, req.body);
     }
+    console.log(`[POST /api/models/${req.params.name}] mode=${mode} saved ${size} bytes`);
     res.json({ ok: true });
   } catch (e) {
+    console.error(`[POST /api/models/${req.params.name}] ERROR mode=${mode}: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -179,12 +202,12 @@ if (process.env.NODE_ENV === 'production') {
 
 initDb().then(() => {
   app.listen(PORT, () => {
-    console.log(`[wizard-server] listening on http://localhost:${PORT}`);
+    console.log(`[wizard-server] listening on http://localhost:${PORT} | storage: ${pool ? 'neon' : 'filesystem'}`);
   });
 }).catch(e => {
   console.error('[wizard-server] Failed to connect to database:', e.message);
   console.error('[wizard-server] Starting with filesystem fallback');
   app.listen(PORT, () => {
-    console.log(`[wizard-server] listening on http://localhost:${PORT} (filesystem mode)`);
+    console.log(`[wizard-server] listening on http://localhost:${PORT} | storage: filesystem (db error)`);
   });
 });
