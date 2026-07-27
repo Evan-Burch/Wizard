@@ -1,46 +1,45 @@
+const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
 
-const dataDir = path.join(__dirname, 'data');
-const trainingFile = path.join(dataDir, 'training-data.json');
-const modelFiles = [
-  path.join(dataDir, 'models', 'bidding.json'),
-  path.join(dataDir, 'models', 'cardplay.json'),
-  path.join(dataDir, 'models', 'meta.json'),
-];
+const DATABASE_URL = process.env.DATABASE_URL;
 
-const emptyData = {
-  bidSamples: [],
-  playSamples: [],
-  totalGamesPlayed: 0,
-};
-
-console.log('Resetting training data...\n');
-
-// Reset training data file
-if (fs.existsSync(trainingFile)) {
-  fs.writeFileSync(trainingFile, JSON.stringify(emptyData, null, 2));
-  console.log(`  Cleared: ${path.relative(__dirname, trainingFile)}`);
-} else {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(trainingFile, JSON.stringify(emptyData, null, 2));
-  console.log(`  Created: ${path.relative(__dirname, trainingFile)}`);
+async function resetPostgres() {
+  const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  await pool.query('DELETE FROM kv_store');
+  console.log('  Cleared all rows from kv_store');
+  await pool.end();
 }
 
-// Remove model files
-for (const file of modelFiles) {
-  if (fs.existsSync(file)) {
-    fs.unlinkSync(file);
-    console.log(`  Deleted: ${path.relative(__dirname, file)}`);
+function resetFilesystem() {
+  const dataDir = path.join(__dirname, 'data');
+  const trainingFile = path.join(dataDir, 'training-data.json');
+  const modelsDir = path.join(dataDir, 'models');
+
+  if (fs.existsSync(trainingFile)) {
+    fs.writeFileSync(trainingFile, JSON.stringify({ bidSamples: [], playSamples: [], totalGamesPlayed: 0 }, null, 2));
+    console.log(`  Cleared: ${path.relative(__dirname, trainingFile)}`);
+  }
+
+  if (fs.existsSync(modelsDir)) {
+    for (const f of fs.readdirSync(modelsDir)) fs.unlinkSync(path.join(modelsDir, f));
+    fs.rmdirSync(modelsDir);
+    console.log(`  Removed: ${path.relative(__dirname, modelsDir)}/`);
   }
 }
 
-// Remove models directory if empty
-const modelsDir = path.join(dataDir, 'models');
-if (fs.existsSync(modelsDir) && fs.readdirSync(modelsDir).length === 0) {
-  fs.rmdirSync(modelsDir);
-  console.log(`  Removed: ${path.relative(__dirname, modelsDir)}/`);
+async function main() {
+  console.log('Resetting training data...\n');
+
+  if (DATABASE_URL) {
+    console.log('  Mode: Postgres');
+    await resetPostgres();
+  } else {
+    console.log('  Mode: filesystem');
+    resetFilesystem();
+  }
+
+  console.log('\nDone. All training data and models erased.');
 }
 
-console.log('\nDone. All training data and models erased.');
-console.log('No browser storage is used — all data is server-side only.');
+main().catch(e => { console.error('Error:', e.message); process.exit(1); });

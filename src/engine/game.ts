@@ -160,10 +160,20 @@ export function handlePlayCard(state: GameState, card: Card): GameState {
   const player = state.players[state.currentPlayerIndex];
   const newHand = player.hand.filter(c => c.id !== card.id);
 
+  const newLeadSuit = (() => {
+    if (state.currentTrick.cards.length === 0) {
+      return (card.special === 'wizard' || card.special === 'jester') ? null : card.suit;
+    }
+    if (state.currentTrick.leadSuit === null && state.currentTrick.cards.length === 1 && state.currentTrick.cards[0].card.special === 'jester' && !card.special && card.suit) {
+      return card.suit;
+    }
+    return state.currentTrick.leadSuit;
+  })();
+
   const trick: Trick = {
     ...state.currentTrick,
     cards: [...state.currentTrick.cards, { playerId: player.id, card }],
-    leadSuit: state.currentTrick.cards.length === 0 ? card.suit : state.currentTrick.leadSuit,
+    leadSuit: newLeadSuit,
   };
 
   const players = state.players.map((p, i) =>

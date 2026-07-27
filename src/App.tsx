@@ -389,7 +389,7 @@ function App() {
         playableIds={state.phase === 'playing' && currentPlayer?.isHuman ? playableIds : undefined}
       />
 
-      {state.round > 0 && state.phase !== 'scoring' && state.phase !== 'game-over' && (
+      {state.round > 0 && (
         <>
           <PersistentScoreboard players={state.players} />
           <TrainingBadge status={trainingStatus} progress={trainingProgress} />
