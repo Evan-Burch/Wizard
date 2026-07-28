@@ -1,5 +1,6 @@
 import { Player as PlayerType, PlayerPosition, Card } from '../types';
 import { getSuitSymbol, getSuitColor } from '../engine/wizard';
+import { AIPhase } from '../engine/ai-tf/pipeline';
 import wizardImg from '../assets/wizard.png';
 import jesterImg from '../assets/jester.png';
 
@@ -7,8 +8,10 @@ interface PlayerProps {
   player: PlayerType;
   isActive: boolean;
   isDealer: boolean;
-  aiPhase?: 'neural' | 'rule-based' | 'shadow';
-  aiConfidence?: number;
+  biddingPhase?: AIPhase;
+  biddingConfidence?: number;
+  cardPlayPhase?: AIPhase;
+  cardPlayConfidence?: number;
 }
 
 const AVATAR_COLORS = ['#1565c0', '#c62828', '#2e7d32', '#6a1b9a'];
@@ -36,7 +39,7 @@ function MiniCardFace({ card }: { card: Card }) {
   );
 }
 
-export function Player({ player, isActive, isDealer, aiPhase, aiConfidence }: PlayerProps) {
+export function Player({ player, isActive, isDealer, biddingPhase, biddingConfidence, cardPlayPhase, cardPlayConfidence }: PlayerProps) {
   const initial = player.name.charAt(0);
   const bgColor = AVATAR_COLORS[player.id];
 
@@ -113,20 +116,37 @@ export function Player({ player, isActive, isDealer, aiPhase, aiConfidence }: Pl
       >
         {initial}
         {isDealer && <div className="dealer-marker">D</div>}
-        {!player.isHuman && aiPhase && (
-          <div
-            className={`ai-phase-icon ai-phase-${aiPhase}`}
-            title={aiPhase === 'neural'
-              ? `Neural net: ${Math.round((aiConfidence ?? 0) * 100)}% confident`
-              : aiPhase === 'shadow'
-                ? 'Shadow mode: observing'
-                : 'Rule-based AI'
-            }
-          >
-            {aiPhase === 'neural' ? '\uD83E\uDDE0' : aiPhase === 'shadow' ? '\uD83D\uDC41' : '\u2699\uFE0F'}
+      </div>
+      {!player.isHuman && (
+        <div className="ai-phase-icons">
+            {biddingPhase && (
+              <div className="ai-phase-item" title={biddingPhase === 'neural'
+                ? `Bidding NN: ${Math.round((biddingConfidence ?? 0) * 100)}% confident`
+                : biddingPhase === 'shadow'
+                  ? 'Bidding: shadow mode'
+                  : 'Bidding: rule-based'
+              }>
+                <span className="ai-phase-label">B</span>
+                <span className={`ai-phase-icon ai-phase-${biddingPhase}`}>
+                  {biddingPhase === 'neural' ? '\uD83E\uDDE0' : biddingPhase === 'shadow' ? '\uD83D\uDC41' : '\u2699\uFE0F'}
+                </span>
+              </div>
+            )}
+            {cardPlayPhase && (
+              <div className="ai-phase-item" title={cardPlayPhase === 'neural'
+                ? `Card play NN: ${Math.round((cardPlayConfidence ?? 0) * 100)}% confident`
+                : cardPlayPhase === 'shadow'
+                  ? 'Card play: shadow mode'
+                  : 'Card play: rule-based'
+              }>
+                <span className="ai-phase-label">P</span>
+                <span className={`ai-phase-icon ai-phase-${cardPlayPhase}`}>
+                  {cardPlayPhase === 'neural' ? '\uD83E\uDDE0' : cardPlayPhase === 'shadow' ? '\uD83D\uDC41' : '\u2699\uFE0F'}
+                </span>
+              </div>
+            )}
           </div>
         )}
-      </div>
       <div className="player-name">{player.name}</div>
     </div>
   );

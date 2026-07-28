@@ -27,7 +27,7 @@ import { Scoreboard } from './components/Scoreboard';
 import { PersistentScoreboard } from './components/PersistentScoreboard';
 import { TrainingBadge } from './components/TrainingBadge';
 import { DataInfoDialog } from './components/DataInfoDialog';
-import { initializeModels, trainAfterRound, onTrainingStatusChange, determineAIPhase, TrainingStatus } from './engine/ai-tf/pipeline';
+import { initializeModels, trainAfterRound, onTrainingStatusChange, determineAIPhase, AIPhase, TrainingStatus } from './engine/ai-tf/pipeline';
 import wizardImg from './assets/wizard.png';
 import jesterImg from './assets/jester.png';
 import './index.css';
@@ -58,7 +58,7 @@ function App() {
   const [scoreboardMinimized, setScoreboardMinimized] = useState(false);
   const [trainingStatus, setTrainingStatus] = useState<TrainingStatus>('loading');
   const [trainingProgress, setTrainingProgress] = useState(0);
-  const [aiPhases, setAiPhases] = useState<Record<number, { phase: 'neural' | 'rule-based' | 'shadow'; confidence: number }>>({});
+  const [aiPhases, setAiPhases] = useState<Record<number, { bidding: { phase: AIPhase; confidence: number }; cardPlay: { phase: AIPhase; confidence: number } }>>({});
   const pendingRecording = useRef<PendingRecording>(null);
   const [dataInfoOpen, setDataInfoOpen] = useState(false);
 
@@ -164,10 +164,12 @@ function App() {
       const timer = setTimeout(() => {
         const cp = state.players[state.currentPlayerIndex];
         if (cp && !cp.isHuman) {
-          const decisionType = state.phase === 'bidding' ? 'bidding' as const : 'playing' as const;
           setAiPhases(prev => ({
             ...prev,
-            [cp.id]: determineAIPhase(cp.id, decisionType),
+            [cp.id]: {
+              bidding: determineAIPhase(cp.id, 'bidding'),
+              cardPlay: determineAIPhase(cp.id, 'playing'),
+            },
           }));
 
           if (state.phase === 'bidding') {
@@ -305,8 +307,10 @@ function App() {
           player={player}
           isActive={state.currentPlayerIndex === player.id}
           isDealer={state.dealerIndex === player.id}
-          aiPhase={aiPhases[player.id]?.phase}
-          aiConfidence={aiPhases[player.id]?.confidence}
+          biddingPhase={aiPhases[player.id]?.bidding.phase}
+          biddingConfidence={aiPhases[player.id]?.bidding.confidence}
+          cardPlayPhase={aiPhases[player.id]?.cardPlay.phase}
+          cardPlayConfidence={aiPhases[player.id]?.cardPlay.confidence}
         />
       ))}
 
