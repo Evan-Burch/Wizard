@@ -6,8 +6,9 @@ const DATABASE_URL = process.env.DATABASE_URL;
 
 async function resetPostgres() {
   const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
-  await pool.query('DELETE FROM kv_store');
-  console.log('  Cleared all rows from kv_store');
+  await pool.query('DELETE FROM training_samples');
+  await pool.query('DELETE FROM kv_store WHERE key LIKE $1', ['model:%']);
+  console.log('  Cleared training_samples and models from kv_store');
   await pool.end();
 }
 

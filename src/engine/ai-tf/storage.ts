@@ -23,6 +23,22 @@ function base64ToFloats(b64: string): Float32Array {
   return new Float32Array(bytes.buffer);
 }
 
+export interface TrainingSample {
+  id: string;
+  type: 'bid' | 'play';
+  features: number[];
+  labels: number[];
+  timestamp: number;
+  gameRound: number;
+  isHuman: boolean;
+  playerIndex?: number;
+  reward?: number;
+  trickIndex?: number;
+  tricksWonBefore?: number;
+  handCardIds?: string[];
+  trickCardIds?: string[];
+}
+
 export async function saveBiddingModel(model: tf.LayersModel): Promise<void> {
   await saveModelToServer('bidding', model);
 }
@@ -109,70 +125,53 @@ async function loadModelFromServer(
   }
 }
 
-export interface TrainingSample {
-  type: 'bid' | 'play';
-  features: number[];
-  labels: number[];
-  timestamp: number;
-  gameRound: number;
-  isHuman: boolean;
-  playerIndex?: number;
-  reward?: number;
-  trickIndex?: number;
-  tricksWonBefore?: number;
-  handCardIds?: string[];
-  trickCardIds?: string[];
-}
+// --- Per-sample API ---
 
-export interface TrainingDataStore {
-  bidSamples: TrainingSample[];
-  playSamples: TrainingSample[];
-  totalGamesPlayed: number;
-}
-
-const MAX_BID_SAMPLES = 2000;
-const MAX_PLAY_SAMPLES = 5000;
-
-function getEmptyStore(): TrainingDataStore {
-  return { bidSamples: [], playSamples: [], totalGamesPlayed: 0 };
-}
-
-export async function saveTrainingData(data: TrainingDataStore): Promise<void> {
+export async function submitSamples(samples: TrainingSample[]): Promise<void> {
+  if (samples.length === 0) return;
   try {
-    await fetch('/api/training-data', {
+    await fetch('/api/training-samples', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({ samples }),
     });
-  } catch {
-    // server down — data lost for this save
-  }
-}
-
-export async function loadTrainingData(): Promise<TrainingDataStore> {
-  try {
-    const res = await fetch('/api/training-data');
-    if (!res.ok) return getEmptyStore();
-    return (await res.json()) as TrainingDataStore;
-  } catch {
-    return getEmptyStore();
-  }
-}
-
-export async function resetTrainingData(): Promise<void> {
-  try {
-    await fetch('/api/training-data', { method: 'DELETE' });
   } catch {
     // server down
   }
 }
 
-export function pruneIfNeeded(data: TrainingDataStore): void {
-  if (data.bidSamples.length > MAX_BID_SAMPLES) {
-    data.bidSamples = data.bidSamples.slice(-MAX_BID_SAMPLES);
+export async function fetchAllSamples(): Promise<TrainingSample[]> {
+  try {
+    const res = await fetch('/api/training-samples');
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.samples || []).map((s: Record<string, unknown>) => ({
+      ...s,
+      features: s.features as number[],
+      labels: s.labels as number[],
+      handCardIds: s.handCardIds as string[] | undefined,
+      trickCardIds: s.trickCardIds as string[] | undefined,
+    })) as TrainingSample[];
+  } catch {
+    return [];
   }
-  if (data.playSamples.length > MAX_PLAY_SAMPLES) {
-    data.playSamples = data.playSamples.slice(-MAX_PLAY_SAMPLES);
+}
+
+export async function fetchSampleStats(): Promise<{ bid: number; play: number }> {
+  try {
+    const res = await fetch('/api/training-stats');
+    if (!res.ok) return { bid: 0, play: 0 };
+    return await res.json();
+  } catch {
+    return { bid: 0, play: 0 };
+  }
+}
+
+export async function resetAllSamples(): Promise<void> {
+  try {
+    await fetch('/api/training-samples', { method: 'DELETE' });
+  } catch {
+    // server down
   }
 }
 

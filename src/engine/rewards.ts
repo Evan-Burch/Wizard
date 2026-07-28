@@ -1,7 +1,7 @@
 import { GameState, Card, Suit } from '../types';
 import { calculateInitialScores, reevaluateScores, wouldWinCard, AIContext } from './ai';
 import { canPlayCard } from './wizard';
-import { TrainingDataStore } from './ai-tf/storage';
+import { TrainingSample } from './ai-tf/storage';
 
 export function classifyHand(hand: Card[], trumpSuit: Suit | null, cardsPlayed: Card[]): {
   winners: string[]; losers: string[]; neutral: string[]; scores: Map<string, number>;
@@ -149,16 +149,19 @@ function collectAllCardsForRound(state: GameState): Card[] {
   return cards;
 }
 
-export function assignRoundRewards(state: GameState, store: TrainingDataStore): void {
+export function assignRoundRewards(state: GameState, samples: TrainingSample[]): void {
   const { cardsPerPlayer, players, trumpSuit } = state;
   const allBids = players.map(p => p.bid);
   const allTricksWon = players.map(p => p.tricksWon);
+
+  const playSamples = samples.filter(s => s.type === 'play' && s.gameRound === state.round);
+  const bidSamples = samples.filter(s => s.type === 'bid' && s.gameRound === state.round);
 
   // Collect all cards that were in play this round
   const allRoundCards = collectAllCardsForRound(state);
 
   // Process play samples (both human and AI)
-  for (const sample of store.playSamples) {
+  for (const sample of playSamples) {
     if (sample.gameRound !== state.round) continue;
     if (sample.trickIndex === undefined || sample.handCardIds === undefined || sample.trickCardIds === undefined) continue;
 
@@ -212,7 +215,7 @@ export function assignRoundRewards(state: GameState, store: TrainingDataStore): 
   }
 
   // Assign bid rewards (both human and AI)
-  for (const sample of store.bidSamples) {
+  for (const sample of bidSamples) {
     if (sample.gameRound !== state.round) continue;
 
     const pid = sample.playerIndex ?? 0;

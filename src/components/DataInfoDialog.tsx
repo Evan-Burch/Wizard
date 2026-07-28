@@ -1,31 +1,26 @@
 import { useState, useEffect } from 'react';
-import { TrainingDataStore } from '../engine/ai-tf/storage';
+import { fetchSampleStats, TrainingSample } from '../engine/ai-tf/storage';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  store: TrainingDataStore;
+  roundBuffer: TrainingSample[];
   onReset: () => void;
 }
 
-export function DataInfoDialog({ isOpen, onClose, store, onReset }: Props) {
-  const [data, setData] = useState<TrainingDataStore>(store);
+export function DataInfoDialog({ isOpen, onClose, roundBuffer, onReset }: Props) {
+  const [stats, setStats] = useState<{ bid: number; play: number } | null>(null);
 
   useEffect(() => {
-    setData(store);
-  }, [store]);
+    if (isOpen) {
+      fetchSampleStats().then(setStats);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const bidHuman = data.bidSamples.filter(s => s.isHuman).length;
-  const bidAI = data.bidSamples.filter(s => !s.isHuman).length;
-  const playHuman = data.playSamples.filter(s => s.isHuman).length;
-  const playAI = data.playSamples.filter(s => !s.isHuman).length;
-
-  const rounds = new Set([
-    ...data.bidSamples.map(s => s.gameRound),
-    ...data.playSamples.map(s => s.gameRound),
-  ]);
+  const totalBid = (stats?.bid ?? 0) + roundBuffer.filter(s => s.type === 'bid').length;
+  const totalPlay = (stats?.play ?? 0) + roundBuffer.filter(s => s.type === 'play').length;
 
   return (
     <div className="data-info-overlay" onClick={onClose}>
@@ -36,37 +31,12 @@ export function DataInfoDialog({ isOpen, onClose, store, onReset }: Props) {
         </div>
         <div className="data-info-body">
           <div className="data-info-row">
-            <span className="data-info-label">Rounds stored</span>
-            <span className="data-info-value">{rounds.size}</span>
-          </div>
-          <div className="data-info-row">
-            <span className="data-info-label">Total games played</span>
-            <span className="data-info-value">{data.totalGamesPlayed}</span>
-          </div>
-          <div className="data-info-divider" />
-          <div className="data-info-row">
             <span className="data-info-label">Bid samples</span>
-            <span className="data-info-value">{data.bidSamples.length}</span>
-          </div>
-          <div className="data-info-subrow">
-            <span className="data-info-label">Human</span>
-            <span className="data-info-value">{bidHuman}</span>
-          </div>
-          <div className="data-info-subrow">
-            <span className="data-info-label">AI</span>
-            <span className="data-info-value">{bidAI}</span>
+            <span className="data-info-value">{totalBid}</span>
           </div>
           <div className="data-info-row">
             <span className="data-info-label">Play samples</span>
-            <span className="data-info-value">{data.playSamples.length}</span>
-          </div>
-          <div className="data-info-subrow">
-            <span className="data-info-label">Human</span>
-            <span className="data-info-value">{playHuman}</span>
-          </div>
-          <div className="data-info-subrow">
-            <span className="data-info-label">AI</span>
-            <span className="data-info-value">{playAI}</span>
+            <span className="data-info-value">{totalPlay}</span>
           </div>
           <div className="data-info-divider" />
           <button className="data-info-reset-btn" onClick={onReset}>

@@ -13,8 +13,8 @@ import {
 } from './engine/game';
 import { predictBid } from './engine/ai-tf/bidding-model';
 import { predictCard } from './engine/ai-tf/cardplay-model';
-import { recordBidSample, recordPlaySample, getTrainingStore, clearTrainingStore, flushTrainingData } from './engine/ai-tf/training';
-import { resetTrainingData, TrainingDataStore } from './engine/ai-tf/storage';
+import { recordBidSample, recordPlaySample, clearRoundBuffer, getRoundBuffer, flushRoundSamples } from './engine/ai-tf/training';
+import { resetAllSamples } from './engine/ai-tf/storage';
 import { assignRoundRewards } from './engine/rewards';
 import { canPlayCard } from './engine/wizard';
 import { Hand } from './components/Hand';
@@ -61,7 +61,6 @@ function App() {
   const [aiPhases, setAiPhases] = useState<Record<number, { phase: 'neural' | 'rule-based' | 'shadow'; confidence: number }>>({});
   const pendingRecording = useRef<PendingRecording>(null);
   const [dataInfoOpen, setDataInfoOpen] = useState(false);
-  const [dataInfoStore, setDataInfoStore] = useState<TrainingDataStore>({ bidSamples: [], playSamples: [], totalGamesPlayed: 0 });
 
   useEffect(() => {
     initializeModels();
@@ -146,8 +145,8 @@ function App() {
   useEffect(() => {
     if (state.phase === 'scoring') {
       setScoreboardMinimized(false);
-      assignRoundRewards(state, getTrainingStore());
-      flushTrainingData();
+      assignRoundRewards(state, getRoundBuffer());
+      flushRoundSamples();
     }
   }, [state.phase]);
 
@@ -165,9 +164,10 @@ function App() {
       const timer = setTimeout(() => {
         const cp = state.players[state.currentPlayerIndex];
         if (cp && !cp.isHuman) {
+          const decisionType = state.phase === 'bidding' ? 'bidding' as const : 'playing' as const;
           setAiPhases(prev => ({
             ...prev,
-            [cp.id]: determineAIPhase(cp.id),
+            [cp.id]: determineAIPhase(cp.id, decisionType),
           }));
 
           if (state.phase === 'bidding') {
@@ -269,17 +269,10 @@ function App() {
   ) as Record<number, import('./types').PlayerPosition>;
 
   const handleResetData = useCallback(async () => {
-    await resetTrainingData();
-    clearTrainingStore();
-    setDataInfoStore({ bidSamples: [], playSamples: [], totalGamesPlayed: 0 });
+    await resetAllSamples();
+    clearRoundBuffer();
     window.location.reload();
   }, []);
-
-  useEffect(() => {
-    if (dataInfoOpen) {
-      setDataInfoStore(getTrainingStore());
-    }
-  }, [dataInfoOpen]);
 
   return (
     <div className="game-table">
@@ -300,7 +293,7 @@ function App() {
       <DataInfoDialog
         isOpen={dataInfoOpen}
         onClose={() => setDataInfoOpen(false)}
-        store={dataInfoStore}
+        roundBuffer={getRoundBuffer()}
         onReset={handleResetData}
       />
 

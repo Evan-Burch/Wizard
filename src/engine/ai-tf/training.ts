@@ -1,22 +1,19 @@
 import { Card, Suit, Trick } from '../../types';
 import { encodeBiddingInput, encodePlayInput } from './features';
-import { TrainingDataStore, loadTrainingData, saveTrainingData, pruneIfNeeded } from './storage';
+import { TrainingSample, submitSamples } from './storage';
 
-let trainingStore: TrainingDataStore = { bidSamples: [], playSamples: [], totalGamesPlayed: 0 };
+let roundBuffer: TrainingSample[] = [];
 
-export async function initTrainingStore(): Promise<void> {
-  trainingStore = await loadTrainingData();
-  window.addEventListener('beforeunload', () => {
-    saveTrainingData(trainingStore);
-  });
+export function clearRoundBuffer(): void {
+  roundBuffer = [];
 }
 
-export function getTrainingStore(): TrainingDataStore {
-  return trainingStore;
+export function getRoundBuffer(): TrainingSample[] {
+  return roundBuffer;
 }
 
-export function clearTrainingStore(): void {
-  trainingStore = { bidSamples: [], playSamples: [], totalGamesPlayed: 0 };
+function trimTo(v: number): number {
+  return Math.max(0, Math.min(v, 1));
 }
 
 export function recordBidSample(
@@ -35,9 +32,10 @@ export function recordBidSample(
     hand, trumpSuit, cardsPlayed, cardsPerPlayer, tricksPlayed, allBids, playerIndex
   );
 
-  const label = [actualBid / Math.max(cardsPerPlayer, 1)];
+  const label = [trimTo(actualBid / Math.max(cardsPerPlayer, 1))];
 
-  trainingStore.bidSamples.push({
+  roundBuffer.push({
+    id: crypto.randomUUID(),
     type: 'bid',
     features,
     labels: label,
@@ -46,8 +44,6 @@ export function recordBidSample(
     isHuman,
     playerIndex,
   });
-
-  pruneIfNeeded(trainingStore);
 }
 
 export function recordPlaySample(
@@ -80,7 +76,8 @@ export function recordPlaySample(
     }
   }
 
-  trainingStore.playSamples.push({
+  roundBuffer.push({
+    id: crypto.randomUUID(),
     type: 'play',
     features,
     labels,
@@ -93,15 +90,10 @@ export function recordPlaySample(
     handCardIds: hand.map(c => c.id),
     trickCardIds: trick.cards.map(tc => tc.card.id),
   });
-
-  pruneIfNeeded(trainingStore);
 }
 
-export function flushTrainingData(): void {
-  saveTrainingData(trainingStore);
-}
-
-export function incrementGamesPlayed(): void {
-  trainingStore.totalGamesPlayed++;
-  saveTrainingData(trainingStore);
+export async function flushRoundSamples(): Promise<void> {
+  if (roundBuffer.length === 0) return;
+  await submitSamples(roundBuffer);
+  roundBuffer = [];
 }

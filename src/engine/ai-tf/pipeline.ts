@@ -1,7 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import { buildBiddingModel, buildCardPlayModel } from './models';
-import { saveBiddingModel, loadBiddingModel, saveCardPlayModel, loadCardPlayModel, saveModelMeta } from './storage';
-import { getTrainingStore, flushTrainingData, initTrainingStore } from './training';
+import { saveBiddingModel, loadBiddingModel, saveCardPlayModel, loadCardPlayModel, saveModelMeta, fetchAllSamples, fetchSampleStats } from './storage';
 
 const MIN_SAMPLES_TO_TRAIN = 200;
 const TRAINING_EPOCHS = 10;
@@ -11,16 +10,19 @@ let biddingModel: tf.LayersModel | null = null;
 let cardPlayModel: tf.LayersModel | null = null;
 let isTraining = false;
 let trainingProgress = 0;
-let shadowMode = true;
+let biddingNeuralReady = false;
+let cardPlayNeuralReady = false;
 let modelsReady = false;
 
 export type AIPhase = 'neural' | 'rule-based' | 'shadow';
+export type DecisionType = 'bidding' | 'playing';
 
 export function getBiddingModel(): tf.LayersModel | null { return biddingModel; }
 export function getCardPlayModel(): tf.LayersModel | null { return cardPlayModel; }
 export function getIsTraining(): boolean { return isTraining; }
 export function getTrainingProgress(): number { return trainingProgress; }
-export function getShadowMode(): boolean { return shadowMode; }
+export function getBiddingNeuralReady(): boolean { return biddingNeuralReady; }
+export function getCardPlayNeuralReady(): boolean { return cardPlayNeuralReady; }
 export function getModelsReady(): boolean { return modelsReady; }
 
 export type TrainingStatus = 'idle' | 'loading' | 'training' | 'ready';
@@ -35,11 +37,12 @@ function notifyStatus(status: TrainingStatus, progress: number = 0): void {
   trainingStatusCallback?.(status, progress);
 }
 
+function anyNeuralReady(): boolean { return biddingNeuralReady || cardPlayNeuralReady; }
+
 export async function initializeModels(): Promise<void> {
   notifyStatus('loading');
 
   try {
-    await initTrainingStore();
     biddingModel = await loadBiddingModel();
     if (!biddingModel) {
       biddingModel = buildBiddingModel();
@@ -54,12 +57,15 @@ export async function initializeModels(): Promise<void> {
 
     modelsReady = true;
 
-    const store = getTrainingStore();
-    if (store.totalGamesPlayed >= 10 && store.bidSamples.length >= MIN_SAMPLES_TO_TRAIN) {
-      shadowMode = false;
+    const stats = await fetchSampleStats();
+    if (stats.bid >= MIN_SAMPLES_TO_TRAIN) {
+      biddingNeuralReady = true;
+    }
+    if (stats.play >= MIN_SAMPLES_TO_TRAIN) {
+      cardPlayNeuralReady = true;
     }
 
-    notifyStatus(shadowMode ? 'idle' : 'ready');
+    notifyStatus(anyNeuralReady() ? 'ready' : 'idle');
   } catch (e) {
     console.warn('Failed to initialize TF models:', e);
     modelsReady = false;
@@ -67,11 +73,12 @@ export async function initializeModels(): Promise<void> {
   }
 }
 
-export function determineAIPhase(_playerIndex: number): { phase: AIPhase; confidence: number } {
+export function determineAIPhase(_playerIndex: number, decisionType: DecisionType): { phase: AIPhase; confidence: number } {
   if (!modelsReady || isTraining) {
     return { phase: 'rule-based', confidence: 1.0 };
   }
-  if (shadowMode) {
+  const ready = decisionType === 'bidding' ? biddingNeuralReady : cardPlayNeuralReady;
+  if (!ready) {
     return { phase: 'shadow', confidence: 0 };
   }
   return { phase: 'neural', confidence: 0.85 };
@@ -79,13 +86,14 @@ export function determineAIPhase(_playerIndex: number): { phase: AIPhase; confid
 
 export async function trainAfterRound(): Promise<void> {
   if (isTraining || !modelsReady) {
-    flushTrainingData();
     return;
   }
 
-  const store = getTrainingStore();
-  if (store.bidSamples.length < MIN_SAMPLES_TO_TRAIN && store.playSamples.length < MIN_SAMPLES_TO_TRAIN) {
-    flushTrainingData();
+  const allSamples = await fetchAllSamples();
+  const bidSamples = allSamples.filter(s => s.type === 'bid');
+  const playSamples = allSamples.filter(s => s.type === 'play');
+
+  if (bidSamples.length < MIN_SAMPLES_TO_TRAIN && playSamples.length < MIN_SAMPLES_TO_TRAIN) {
     return;
   }
 
@@ -96,10 +104,10 @@ export async function trainAfterRound(): Promise<void> {
   await tf.nextFrame();
 
   try {
-    if (store.bidSamples.length >= MIN_SAMPLES_TO_TRAIN && biddingModel) {
-      const bidFeatures = store.bidSamples.map(s => s.features);
-      const bidLabels = store.bidSamples.map(s => s.labels);
-      const bidWeights = store.bidSamples.map(s => s.isHuman ? 1.0 : (0.1 + 0.9 * Math.max(0, s.reward ?? 0)));
+    if (bidSamples.length >= MIN_SAMPLES_TO_TRAIN && biddingModel) {
+      const bidFeatures = bidSamples.map(s => s.features);
+      const bidLabels = bidSamples.map(s => s.labels);
+      const bidWeights = bidSamples.map(s => s.isHuman ? 1.0 : (0.1 + 0.9 * Math.max(0, s.reward ?? 0)));
 
       const xTensor = tf.tensor2d(bidFeatures);
       const yTensor = tf.tensor2d(bidLabels);
@@ -133,10 +141,10 @@ export async function trainAfterRound(): Promise<void> {
 
     await tf.nextFrame();
 
-    if (store.playSamples.length >= MIN_SAMPLES_TO_TRAIN && cardPlayModel) {
-      const playFeatures = store.playSamples.map(s => s.features);
-      const playLabels = store.playSamples.map(s => s.labels);
-      const playWeights = store.playSamples.map(s => s.isHuman ? 1.0 : (0.1 + 0.9 * Math.max(0, s.reward ?? 0)));
+    if (playSamples.length >= MIN_SAMPLES_TO_TRAIN && cardPlayModel) {
+      const playFeatures = playSamples.map(s => s.features);
+      const playLabels = playSamples.map(s => s.labels);
+      const playWeights = playSamples.map(s => s.isHuman ? 1.0 : (0.1 + 0.9 * Math.max(0, s.reward ?? 0)));
 
       const xTensor = tf.tensor2d(playFeatures);
       const yTensor = tf.tensor2d(playLabels);
@@ -168,25 +176,25 @@ export async function trainAfterRound(): Promise<void> {
       await saveCardPlayModel(cardPlayModel);
     }
 
-    store.totalGamesPlayed++;
-
-    if (store.totalGamesPlayed >= 10 && store.bidSamples.length >= MIN_SAMPLES_TO_TRAIN) {
-      shadowMode = false;
+    if (bidSamples.length >= MIN_SAMPLES_TO_TRAIN) {
+      biddingNeuralReady = true;
+    }
+    if (playSamples.length >= MIN_SAMPLES_TO_TRAIN) {
+      cardPlayNeuralReady = true;
     }
 
     saveModelMeta({
       version: 1,
       lastTrained: Date.now(),
-      totalTrainingSamples: store.bidSamples.length + store.playSamples.length,
+      totalTrainingSamples: bidSamples.length + playSamples.length,
     });
 
-    flushTrainingData();
     trainingProgress = 100;
-    notifyStatus(shadowMode ? 'idle' : 'ready', 100);
+    notifyStatus(anyNeuralReady() ? 'ready' : 'idle', 100);
 
   } catch (e) {
     console.warn('Training failed:', e);
-    notifyStatus(shadowMode ? 'idle' : 'ready');
+    notifyStatus(anyNeuralReady() ? 'ready' : 'idle');
   } finally {
     isTraining = false;
   }

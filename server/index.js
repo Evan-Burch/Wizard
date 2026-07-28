@@ -20,6 +20,23 @@ async function initDb() {
   console.log('[wizard-server] Connecting to Neon Postgres...');
   pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS training_samples (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      features JSONB NOT NULL,
+      labels JSONB NOT NULL,
+      timestamp BIGINT NOT NULL,
+      game_round INTEGER NOT NULL,
+      is_human BOOLEAN NOT NULL,
+      player_index INTEGER,
+      reward REAL,
+      trick_index INTEGER,
+      tricks_won_before INTEGER,
+      hand_card_ids JSONB,
+      trick_card_ids JSONB
+    )
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS kv_store (
       key TEXT PRIMARY KEY,
       value JSONB NOT NULL
@@ -44,13 +61,6 @@ function readTrainingDataFs() {
   } catch { return { bidSamples: [], playSamples: [], totalGamesPlayed: 0 }; }
 }
 
-function writeTrainingDataFs(data) {
-  ensureDataDir();
-  const tmp = TRAINING_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
-  fs.renameSync(tmp, TRAINING_FILE);
-}
-
 function readModelFs(name) {
   const f = path.join(DATA_DIR, 'models', name + '.json');
   if (!fs.existsSync(f)) return null;
@@ -67,15 +77,6 @@ function writeModelFs(name, data) {
   fs.renameSync(tmp, f);
 }
 
-function deleteAllFs() {
-  writeTrainingDataFs({ bidSamples: [], playSamples: [], totalGamesPlayed: 0 });
-  const dir = path.join(DATA_DIR, 'models');
-  if (fs.existsSync(dir)) {
-    for (const f of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, f));
-    fs.rmdirSync(dir);
-  }
-}
-
 // --- KV helpers for Postgres ---
 
 async function kvGet(key) {
@@ -90,61 +91,117 @@ async function kvSet(key, value) {
   );
 }
 
-async function kvDeleteAll() {
-  await pool.query('DELETE FROM kv_store');
+// --- Per-sample training data endpoints ---
+
+function runQuery(sql, params) {
+  return pool ? pool.query(sql, params) : Promise.resolve({ rows: [] });
 }
 
-// --- Training data endpoints ---
-
-app.get('/api/training-data', async (req, res) => {
+app.post('/api/training-samples', async (req, res) => {
   const mode = pool ? 'neon' : 'filesystem';
   try {
-    if (pool) {
-      const data = await kvGet('training-data');
-      const d = data || { bidSamples: [], playSamples: [], totalGamesPlayed: 0 };
-      console.log(`[GET /api/training-data] mode=${mode} bids=${d.bidSamples.length} plays=${d.playSamples.length} games=${d.totalGamesPlayed}`);
-      res.json(d);
+    if (mode === 'filesystem') {
+      const store = readTrainingDataFs();
+      for (const s of req.body.samples || []) {
+        if (s.type === 'bid') store.bidSamples.push(s);
+        else store.playSamples.push(s);
+        // Prune
+        if (store.bidSamples.length > 2000) store.bidSamples = store.bidSamples.slice(-2000);
+        if (store.playSamples.length > 5000) store.playSamples = store.playSamples.slice(-5000);
+      }
+      const tmp = TRAINING_FILE + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf-8');
+      fs.renameSync(tmp, TRAINING_FILE);
     } else {
-      const d = readTrainingDataFs();
-      console.log(`[GET /api/training-data] mode=${mode} bids=${d.bidSamples.length} plays=${d.playSamples.length}`);
-      res.json(d);
+      const samples = req.body.samples || [];
+      for (const s of samples) {
+        await runQuery(
+          `INSERT INTO training_samples (id, type, features, labels, timestamp, game_round, is_human, player_index, reward, trick_index, tricks_won_before, hand_card_ids, trick_card_ids)
+           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb)
+           ON CONFLICT (id) DO NOTHING`,
+          [s.id, s.type, JSON.stringify(s.features), JSON.stringify(s.labels), s.timestamp, s.gameRound, s.isHuman, s.playerIndex ?? null, s.reward ?? null, s.trickIndex ?? null, s.tricksWonBefore ?? null, JSON.stringify(s.handCardIds ?? null), JSON.stringify(s.trickCardIds ?? null)]
+        );
+      }
+      console.log(`[POST /api/training-samples] mode=neon submitted ${samples.length} samples`);
     }
+    res.json({ ok: true });
   } catch (e) {
-    console.error(`[GET /api/training-data] ERROR mode=${mode}: ${e.message}`);
+    console.error(`[POST /api/training-samples] ERROR: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
 
-app.post('/api/training-data', async (req, res) => {
+app.get('/api/training-samples', async (req, res) => {
   const mode = pool ? 'neon' : 'filesystem';
   try {
-    const bids = req.body.bidSamples?.length ?? 0;
-    const plays = req.body.playSamples?.length ?? 0;
-    if (pool) {
-      await kvSet('training-data', req.body);
+    if (mode === 'filesystem') {
+      const store = readTrainingDataFs();
+      res.json({ samples: [...store.bidSamples, ...store.playSamples] });
     } else {
-      writeTrainingDataFs(req.body);
+      const result = await runQuery('SELECT * FROM training_samples ORDER BY timestamp ASC');
+      const samples = result.rows.map(r => ({
+        id: r.id,
+        type: r.type,
+        features: r.features,
+        labels: r.labels,
+        timestamp: r.timestamp,
+        gameRound: r.game_round,
+        isHuman: r.is_human,
+        playerIndex: r.player_index,
+        reward: r.reward,
+        trickIndex: r.trick_index,
+        tricksWonBefore: r.tricks_won_before,
+        handCardIds: r.hand_card_ids,
+        trickCardIds: r.trick_card_ids,
+      }));
+      console.log(`[GET /api/training-samples] mode=neon returned ${samples.length} samples`);
+      res.json({ samples });
     }
-    console.log(`[POST /api/training-data] mode=${mode} saved bids=${bids} plays=${plays}`);
-    res.json({ ok: true });
   } catch (e) {
-    console.error(`[POST /api/training-data] ERROR mode=${mode}: ${e.message}`);
+    console.error(`[GET /api/training-samples] ERROR: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
 
-app.delete('/api/training-data', async (req, res) => {
+app.get('/api/training-stats', async (req, res) => {
   const mode = pool ? 'neon' : 'filesystem';
   try {
-    if (pool) {
-      await kvDeleteAll();
+    if (mode === 'filesystem') {
+      const store = readTrainingDataFs();
+      res.json({ bid: store.bidSamples.length, play: store.playSamples.length });
     } else {
-      deleteAllFs();
+      const result = await runQuery("SELECT type, COUNT(*)::int as count FROM training_samples GROUP BY type");
+      const stats = { bid: 0, play: 0 };
+      for (const r of result.rows) stats[r.type] = r.count;
+      res.json(stats);
     }
-    console.log(`[DELETE /api/training-data] mode=${mode} cleared`);
+  } catch (e) {
+    console.error(`[GET /api/training-stats] ERROR: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/training-samples', async (req, res) => {
+  const mode = pool ? 'neon' : 'filesystem';
+  try {
+    if (mode === 'filesystem') {
+      const empty = { bidSamples: [], playSamples: [], totalGamesPlayed: 0 };
+      const tmp = TRAINING_FILE + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(empty, null, 2), 'utf-8');
+      fs.renameSync(tmp, TRAINING_FILE);
+      const modelsDir = path.join(DATA_DIR, 'models');
+      if (fs.existsSync(modelsDir)) {
+        for (const f of fs.readdirSync(modelsDir)) fs.unlinkSync(path.join(modelsDir, f));
+        fs.rmdirSync(modelsDir);
+      }
+    } else {
+      await runQuery('DELETE FROM training_samples');
+      await runQuery('DELETE FROM kv_store WHERE key LIKE $1', ['model:%']);
+    }
+    console.log(`[DELETE /api/training-samples] mode=${mode} cleared`);
     res.json({ ok: true });
   } catch (e) {
-    console.error(`[DELETE /api/training-data] ERROR mode=${mode}: ${e.message}`);
+    console.error(`[DELETE /api/training-samples] ERROR: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -156,17 +213,17 @@ app.get('/api/models/:name', async (req, res) => {
   try {
     if (pool) {
       const data = await kvGet('model:' + req.params.name);
-      console.log(`[GET /api/models/${req.params.name}] mode=${mode} found=${!!data}`);
+      console.log(`[GET /api/models/${req.params.name}] mode=neon found=${!!data}`);
       if (!data) return res.status(404).json({ error: 'model not found' });
       res.json(data);
     } else {
       const data = readModelFs(req.params.name);
-      console.log(`[GET /api/models/${req.params.name}] mode=${mode} found=${!!data}`);
+      console.log(`[GET /api/models/${req.params.name}] mode=filesystem found=${!!data}`);
       if (!data) return res.status(404).json({ error: 'model not found' });
       res.json(data);
     }
   } catch (e) {
-    console.error(`[GET /api/models/${req.params.name}] ERROR mode=${mode}: ${e.message}`);
+    console.error(`[GET /api/models/${req.params.name}] ERROR: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -183,7 +240,7 @@ app.post('/api/models/:name', async (req, res) => {
     console.log(`[POST /api/models/${req.params.name}] mode=${mode} saved ${size} bytes`);
     res.json({ ok: true });
   } catch (e) {
-    console.error(`[POST /api/models/${req.params.name}] ERROR mode=${mode}: ${e.message}`);
+    console.error(`[POST /api/models/${req.params.name}] ERROR: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
