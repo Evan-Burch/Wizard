@@ -7,6 +7,12 @@ export function getCardDisplayValue(card: Card): string {
   return `${card.rank} of ${card.suit}`;
 }
 
+export function compactCardDisplay(card: Card): string {
+  if (card.special === 'wizard') return 'W';
+  if (card.special === 'jester') return 'J';
+  return `${card.rank}${getSuitSymbol(card.suit!)}`;
+}
+
 export function getSuitSymbol(suit: Suit): string {
   switch (suit) {
     case 'hearts': return '\u2665';

@@ -9,33 +9,33 @@ import {
   handleAIPlayer,
   handleContinueRound,
   buildAIContext,
-  collectAllCardsPlayed,
 } from './engine/game';
-import { predictBid } from './engine/ai-tf/bidding-model';
-import { predictCard } from './engine/ai-tf/cardplay-model';
-import { recordBidSample, recordPlaySample, clearRoundBuffer, getRoundBuffer, flushRoundSamples } from './engine/ai-tf/training';
-import { resetAllSamples } from './engine/ai-tf/storage';
-import { assignRoundRewards } from './engine/rewards';
-import { canPlayCard } from './engine/wizard';
+import { calculateBid, selectCard, getCardPlayRankings } from './engine/ai';
+import { canPlayCard, compactCardDisplay } from './engine/wizard';
 import { Hand } from './components/Hand';
 import { Player } from './components/Player';
+import { BrainPanel } from './components/BrainPanel';
 import { TrickArea } from './components/TrickArea';
 import { TrumpIndicator } from './components/TrumpIndicator';
 import { TrumpSelector } from './components/TrumpSelector';
 import { BidSelector } from './components/BidSelector';
 import { Scoreboard } from './components/Scoreboard';
 import { PersistentScoreboard } from './components/PersistentScoreboard';
-import { TrainingBadge } from './components/TrainingBadge';
-import { DataInfoDialog } from './components/DataInfoDialog';
-import { initializeModels, trainAfterRound, onTrainingStatusChange, determineAIPhase, AIPhase, TrainingStatus } from './engine/ai-tf/pipeline';
 import wizardImg from './assets/wizard.png';
 import jesterImg from './assets/jester.png';
 import './index.css';
 
-type PendingRecording =
-  | { type: 'bid'; isHuman: boolean; hand: import('./types').Card[]; trumpSuit: import('./types').Suit | null; cardsPlayed: import('./types').Card[]; cardsPerPlayer: number; tricksPlayed: number; allBids: (number | null)[]; playerIndex: number; bid: number; round: number }
-  | { type: 'play'; isHuman: boolean; hand: import('./types').Card[]; trick: import('./types').Trick; trumpSuit: import('./types').Suit | null; cardsPlayed: import('./types').Card[]; tricksPlayed: number; cardsPerPlayer: number; bid: number; tricksWon: number; allBids: (number | null)[]; allTricksWon: number[]; playerIndex: number; card: import('./types').Card; round: number }
-  | null;
+interface TrickInsight {
+  trickIndex: number;
+  handAtStart: import('./types').Card[];
+  tricksWonBefore: number;
+  bid: number;
+  cardsPlayedSoFar: import('./types').Card[];
+  playersLeft: number;
+  bestPlays: { card: import('./types').Card; score: number; willWin: boolean }[];
+  chosenCard: import('./types').Card;
+  completedTrick?: import('./types').Card[];
+}
 
 function MiniCardFace({ card }: { card: import('./types').Card }) {
   if (card.special === 'wizard') {
@@ -56,19 +56,13 @@ function MiniCardFace({ card }: { card: import('./types').Card }) {
 
 function App() {
   const [scoreboardMinimized, setScoreboardMinimized] = useState(false);
-  const [trainingStatus, setTrainingStatus] = useState<TrainingStatus>('loading');
-  const [trainingProgress, setTrainingProgress] = useState(0);
-  const [aiPhases, setAiPhases] = useState<Record<number, { bidding: { phase: AIPhase; confidence: number }; cardPlay: { phase: AIPhase; confidence: number } }>>({});
-  const pendingRecording = useRef<PendingRecording>(null);
-  const [dataInfoOpen, setDataInfoOpen] = useState(false);
-
-  useEffect(() => {
-    initializeModels();
-    onTrainingStatusChange((status, progress) => {
-      setTrainingStatus(status);
-      setTrainingProgress(progress);
-    });
-  }, []);
+  const [aiHints, setAiHints] = useState<Record<number, {
+    predictedBid?: number;
+    chosenCard?: string;
+    topStr?: string;
+  }>>({});
+  const [brainPanelPlayer, setBrainPanelPlayer] = useState<number | null>(null);
+  const trickInsightsRef = useRef<Record<number, TrickInsight[]>>({});
 
   const [state, dispatch] = useReducer(
     (s: ReturnType<typeof createInitialState>, action: { type: string; payload?: unknown }) => {
@@ -77,47 +71,10 @@ function App() {
         case 'SELECT_TRUMP': return handleSelectTrump(s, action.payload as import('./types').Suit);
         case 'BID': {
           const bid = action.payload as number;
-          const player = s.players[s.currentPlayerIndex];
-          if (player.isHuman) {
-            pendingRecording.current = {
-              type: 'bid',
-              isHuman: true,
-              hand: player.hand,
-              trumpSuit: s.trumpSuit,
-              cardsPlayed: collectAllCardsPlayed(s),
-              cardsPerPlayer: s.cardsPerPlayer,
-              tricksPlayed: s.tricksPlayed,
-              allBids: s.players.map(p => p.bid),
-              playerIndex: s.currentPlayerIndex,
-              bid,
-              round: s.round,
-            };
-          }
           return handleBid(s, bid);
         }
         case 'PLAY': {
           const card = action.payload as import('./types').Card;
-          const player = s.players[s.currentPlayerIndex];
-          if (player.isHuman) {
-            const ctx = buildAIContext(s, s.currentPlayerIndex);
-            pendingRecording.current = {
-              type: 'play',
-              isHuman: true,
-              hand: player.hand,
-              trick: s.currentTrick,
-              trumpSuit: s.trumpSuit,
-              cardsPlayed: collectAllCardsPlayed(s),
-              tricksPlayed: s.tricksPlayed,
-              cardsPerPlayer: s.cardsPerPlayer,
-              bid: ctx.bid,
-              tricksWon: ctx.tricksWon,
-              allBids: ctx.allBids,
-              allTricksWon: ctx.allTricksWon,
-              playerIndex: s.currentPlayerIndex,
-              card,
-              round: s.round,
-            };
-          }
           return handlePlayCard(s, card);
         }
         case 'AI': return handleAIPlayer(s);
@@ -125,7 +82,6 @@ function App() {
         case 'CLEAR_DELAY': return { ...s, trickJustResolved: false };
         case 'CONTINUE': {
           setScoreboardMinimized(false);
-          trainAfterRound();
           return handleContinueRound(s);
         }
         case 'RESET': return createInitialState();
@@ -145,8 +101,6 @@ function App() {
   useEffect(() => {
     if (state.phase === 'scoring') {
       setScoreboardMinimized(false);
-      assignRoundRewards(state, getRoundBuffer());
-      flushRoundSamples();
     }
   }, [state.phase]);
 
@@ -164,49 +118,34 @@ function App() {
       const timer = setTimeout(() => {
         const cp = state.players[state.currentPlayerIndex];
         if (cp && !cp.isHuman) {
-          setAiPhases(prev => ({
-            ...prev,
-            [cp.id]: {
-              bidding: determineAIPhase(cp.id, 'bidding'),
-              cardPlay: determineAIPhase(cp.id, 'playing'),
-            },
-          }));
+          const ctx = buildAIContext(state, state.currentPlayerIndex);
 
           if (state.phase === 'bidding') {
-            const ctx = buildAIContext(state, state.currentPlayerIndex);
-            const bid = predictBid(cp.hand, ctx);
-            pendingRecording.current = {
-              type: 'bid',
-              isHuman: false,
-              hand: cp.hand,
-              trumpSuit: state.trumpSuit,
-              cardsPlayed: collectAllCardsPlayed(state),
-              cardsPerPlayer: state.cardsPerPlayer,
-              tricksPlayed: state.tricksPlayed,
-              allBids: state.players.map(p => p.bid),
-              playerIndex: state.currentPlayerIndex,
-              bid,
-              round: state.round,
-            };
+            const bid = calculateBid(cp.hand, ctx);
+            setAiHints(prev => ({ ...prev, [cp.id]: { ...prev[cp.id], predictedBid: bid } }));
           } else if (state.phase === 'playing') {
-            const ctx = buildAIContext(state, state.currentPlayerIndex);
-            const card = predictCard(cp.hand, state.currentTrick, ctx);
-            pendingRecording.current = {
-              type: 'play',
-              isHuman: false,
-              hand: cp.hand,
-              trick: state.currentTrick,
-              trumpSuit: state.trumpSuit,
-              cardsPlayed: collectAllCardsPlayed(state),
-              tricksPlayed: state.tricksPlayed,
-              cardsPerPlayer: state.cardsPerPlayer,
-              bid: ctx.bid,
-              tricksWon: ctx.tricksWon,
-              allBids: ctx.allBids,
-              allTricksWon: ctx.allTricksWon,
-              playerIndex: state.currentPlayerIndex,
-              card,
-              round: state.round,
+            const card = selectCard(cp.hand, state.currentTrick, ctx);
+            const rankings = getCardPlayRankings(cp.hand, state.currentTrick, ctx);
+            const topStr = rankings.slice(0, 3).map((r, i) =>
+              `  ${i + 1}. ${compactCardDisplay(r.card)} — ${(r.score * 100).toFixed(0)}%${r.willWin ? ' WIN' : ' lose'}`
+            ).join('\n');
+            setAiHints(prev => ({
+              ...prev,
+              [cp.id]: { ...prev[cp.id], chosenCard: compactCardDisplay(card), topStr },
+            }));
+            const playerInsights = trickInsightsRef.current[cp.id] ?? [];
+            trickInsightsRef.current = {
+              ...trickInsightsRef.current,
+              [cp.id]: [...playerInsights, {
+                trickIndex: state.tricksPlayed,
+                handAtStart: [...cp.hand],
+                tricksWonBefore: ctx.tricksWon,
+                bid: ctx.bid,
+                cardsPlayedSoFar: state.currentTrick.cards.map(tc => tc.card),
+                playersLeft: 4 - state.currentTrick.cards.length - 1,
+                bestPlays: rankings,
+                chosenCard: card,
+              }],
             };
           }
         }
@@ -215,29 +154,6 @@ function App() {
       return () => clearTimeout(timer);
     }
   }, [isAITurn, shouldDelayAI, state.currentPlayerIndex, state.phase]);
-
-  useEffect(() => {
-    const recording = pendingRecording.current;
-    if (recording) {
-      pendingRecording.current = null;
-      if (recording.type === 'bid') {
-        recordBidSample(
-          recording.hand, recording.trumpSuit,
-          recording.cardsPlayed, recording.cardsPerPlayer,
-          recording.tricksPlayed, recording.allBids,
-          recording.playerIndex, recording.bid, recording.round, recording.isHuman
-        );
-      } else {
-        recordPlaySample(
-          recording.hand, recording.trick, recording.trumpSuit,
-          recording.cardsPlayed, recording.tricksPlayed, recording.cardsPerPlayer,
-          recording.bid, recording.tricksWon, recording.allBids, recording.allTricksWon,
-          recording.playerIndex, recording.card, recording.round,
-          recording.isHuman, recording.tricksPlayed
-        );
-      }
-    }
-  }, [state]);
 
   useEffect(() => {
     if (shouldDelayAI) {
@@ -270,11 +186,13 @@ function App() {
     state.players.map(p => [p.id, p.position])
   ) as Record<number, import('./types').PlayerPosition>;
 
-  const handleResetData = useCallback(async () => {
-    await resetAllSamples();
-    clearRoundBuffer();
-    window.location.reload();
-  }, []);
+  const [currentInsightRound, setCurrentInsightRound] = useState(0);
+  useEffect(() => {
+    if (state.round !== currentInsightRound) {
+      setCurrentInsightRound(state.round);
+      trickInsightsRef.current = {};
+    }
+  }, [state.round]);
 
   return (
     <div className="game-table">
@@ -290,14 +208,14 @@ function App() {
         </div>
       </div>
 
-      <button className="data-info-btn" onClick={() => setDataInfoOpen(true)}>i</button>
-
-      <DataInfoDialog
-        isOpen={dataInfoOpen}
-        onClose={() => setDataInfoOpen(false)}
-        roundBuffer={getRoundBuffer()}
-        onReset={handleResetData}
-      />
+      {brainPanelPlayer !== null && (
+        <BrainPanel
+          player={state.players[brainPanelPlayer]}
+          insights={trickInsightsRef.current[brainPanelPlayer] ?? []}
+          defaultTab={state.tricksPlayed}
+          onClose={() => setBrainPanelPlayer(null)}
+        />
+      )}
 
       <TrumpIndicator trumpSuit={state.trumpSuit} flippedCard={state.flippedCard} />
 
@@ -307,10 +225,10 @@ function App() {
           player={player}
           isActive={state.currentPlayerIndex === player.id}
           isDealer={state.dealerIndex === player.id}
-          biddingPhase={aiPhases[player.id]?.bidding.phase}
-          biddingConfidence={aiPhases[player.id]?.bidding.confidence}
-          cardPlayPhase={aiPhases[player.id]?.cardPlay.phase}
-          cardPlayConfidence={aiPhases[player.id]?.cardPlay.confidence}
+          predictedBid={aiHints[player.id]?.predictedBid}
+          chosenCard={aiHints[player.id]?.chosenCard}
+          top3Str={aiHints[player.id]?.topStr}
+          onOpenBrainPanel={setBrainPanelPlayer}
         />
       ))}
 
@@ -389,7 +307,6 @@ function App() {
       {state.round > 0 && (
         <>
           <PersistentScoreboard players={state.players} />
-          <TrainingBadge status={trainingStatus} progress={trainingProgress} />
         </>
       )}
 

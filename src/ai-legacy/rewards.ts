@@ -1,6 +1,7 @@
 import { GameState, Card, Suit } from '../types';
-import { calculateInitialScores, reevaluateScores, wouldWinCard, AIContext } from './ai';
-import { canPlayCard } from './wizard';
+import { calculateInitialScores, reevaluateScores, wouldWinCard, AIContext } from '../engine/ai';
+import { canPlayCard } from '../engine/wizard';
+import { getRankValue } from '../engine/deck';
 import { TrainingSample } from './ai-tf/storage';
 
 export function classifyHand(hand: Card[], trumpSuit: Suit | null, cardsPlayed: Card[]): {
@@ -77,6 +78,80 @@ function isForcedPlay(hand: Card[], leadSuit: Suit | null, trumpSuit: Suit | nul
   return legalCount <= 1;
 }
 
+function determineTrickWinnerCard(
+  trickCards: Card[],
+  trumpSuit: Suit | null,
+): Card | null {
+  if (trickCards.length === 0) return null;
+
+  const wizardIdx = trickCards.findIndex(c => c.special === 'wizard');
+  if (wizardIdx >= 0) return trickCards[wizardIdx];
+
+  let winner: Card | null = null;
+
+  for (const card of trickCards) {
+    if (card.special === 'jester') continue;
+    if (winner === null) { winner = card; continue; }
+
+    if (trumpSuit !== null && card.suit === trumpSuit && winner.suit !== trumpSuit) {
+      winner = card; continue;
+    }
+
+    if (card.suit === winner.suit && getRankValue(card.rank!) > getRankValue(winner.rank!)) {
+      winner = card;
+    }
+  }
+
+  return winner;
+}
+
+function getLeadSuitFromTrick(trickCards: Card[]): Suit | null {
+  for (const card of trickCards) {
+    if (card.special === 'wizard' || card.special === 'jester') continue;
+    return card.suit;
+  }
+  return null;
+}
+
+export function computePlayRewardFull(
+  bid: number,
+  tricksWonBefore: number,
+  trickIndex: number,
+  cardsPerPlayer: number,
+  hand: Card[],
+  targetCard: Card,
+  completedTrick: Card[],
+  trumpSuit: Suit | null,
+  allBids: (number | null)[],
+  allTricksWon: number[],
+  playerIndex: number,
+  cardsPlayedBeforeTrick: Card[],
+): number {
+  const leadSuit = getLeadSuitFromTrick(completedTrick);
+  if (isForcedPlay(hand, leadSuit, trumpSuit)) return 0;
+
+  const beforeEval = evaluatePosition(
+    bid, tricksWonBefore, trickIndex, cardsPerPlayer,
+    hand, trumpSuit, cardsPlayedBeforeTrick, playerIndex, allBids, allTricksWon,
+  );
+
+  const cardWon = determineTrickWinnerCard(completedTrick, trumpSuit)?.id === targetCard.id;
+  const needed = bid - tricksWonBefore;
+
+  if (needed <= 0 && cardWon) return -1.0;
+
+  const afterHand = hand.filter(c => c.id !== targetCard.id);
+  const afterCardsPlayed = [...cardsPlayedBeforeTrick, ...completedTrick];
+  const afterTricksWon = cardWon ? tricksWonBefore + 1 : tricksWonBefore;
+
+  const afterEval = evaluatePosition(
+    bid, afterTricksWon, trickIndex + 1, cardsPerPlayer,
+    afterHand, trumpSuit, afterCardsPlayed, playerIndex, allBids, allTricksWon,
+  );
+
+  return afterEval - beforeEval;
+}
+
 export function computePlayRewardDirect(
   bid: number,
   tricksWonBefore: number,
@@ -138,6 +213,18 @@ export function computeBidReward(bid: number, tricksWon: number, cardsPerPlayer:
   return -0.3 - 0.7 * (diff / cardsPerPlayer);
 }
 
+function findCompletedTrick(trickIndex: number, state: GameState): Card[] | null {
+  if (trickIndex < 0 || trickIndex >= state.trickWinners.length) return null;
+  const winnerId = state.trickWinners[trickIndex];
+  if (winnerId < 0) return null;
+  const player = state.players[winnerId];
+  let tricksWonBy = 0;
+  for (let i = 0; i <= trickIndex; i++) {
+    if (state.trickWinners[i] === winnerId) tricksWonBy++;
+  }
+  return player.tricks[tricksWonBy - 1] ?? null;
+}
+
 function collectAllCardsForRound(state: GameState): Card[] {
   const cards: Card[] = [];
   for (const p of state.players) {
@@ -157,10 +244,9 @@ export function assignRoundRewards(state: GameState, samples: TrainingSample[]):
   const playSamples = samples.filter(s => s.type === 'play' && s.gameRound === state.round);
   const bidSamples = samples.filter(s => s.type === 'bid' && s.gameRound === state.round);
 
-  // Collect all cards that were in play this round
   const allRoundCards = collectAllCardsForRound(state);
 
-  // Process play samples (both human and AI)
+  // Process play samples using full completed trick
   for (const sample of playSamples) {
     if (sample.gameRound !== state.round) continue;
     if (sample.trickIndex === undefined || sample.handCardIds === undefined || sample.trickCardIds === undefined) continue;
@@ -168,47 +254,38 @@ export function assignRoundRewards(state: GameState, samples: TrainingSample[]):
     const pid = sample.playerIndex ?? 0;
     const player = players[pid];
     const trickIdx = sample.trickIndex;
-    const tricksWonBefore = sample.tricksWonBefore ?? 0;
 
-    // Reconstruct hand at play time
+    const completedTrick = findCompletedTrick(trickIdx, state);
+    if (!completedTrick) continue;
+
     const hand = sample.handCardIds.map((id: string) => allRoundCards.find(c => c.id === id)).filter(Boolean) as Card[];
     if (hand.length === 0) continue;
 
-    // Other cards in trick at play time
-    const otherTrickCards = sample.trickCardIds.map((id: string) => allRoundCards.find(c => c.id === id)).filter(Boolean) as Card[];
-
-    // Cards played before this trick
-    const cardsPlayedBeforeTrick: Card[] = [];
-    for (const p of players) {
-      for (const trick of p.tricks) {
-        cardsPlayedBeforeTrick.push(...trick);
-      }
-    }
-
-    // Determine chosen card from labels
     const chosenCardIdx = sample.labels.indexOf(1);
     if (chosenCardIdx < 0 || chosenCardIdx >= hand.length) continue;
     const chosenCard = hand[chosenCardIdx];
 
-    // Determine lead suit from other cards (first card was lead)
-    const leadSuit = otherTrickCards.length > 0 ? otherTrickCards[0].suit : chosenCard.suit;
+    const tricksWonBefore = sample.tricksWonBefore ?? 0;
 
-    const priorCardsPlayed = trickIdx === 0 ? [] : cardsPlayedBeforeTrick;
+    const cardsPlayedBeforeTrick: Card[] = [];
+    for (let t = 0; t < trickIdx; t++) {
+      const tTrick = findCompletedTrick(t, state);
+      if (tTrick) cardsPlayedBeforeTrick.push(...tTrick);
+    }
 
-    const reward = computePlayRewardDirect(
+    const reward = computePlayRewardFull(
       player.bid ?? 0,
       tricksWonBefore,
       trickIdx,
       cardsPerPlayer,
       hand,
       chosenCard,
-      otherTrickCards,
-      leadSuit,
+      completedTrick,
       trumpSuit,
       allBids,
       allTricksWon,
       pid,
-      priorCardsPlayed,
+      cardsPlayedBeforeTrick,
     );
 
     sample.reward = reward;

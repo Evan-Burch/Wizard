@@ -1,6 +1,5 @@
 import { Player as PlayerType, PlayerPosition, Card } from '../types';
 import { getSuitSymbol, getSuitColor } from '../engine/wizard';
-import { AIPhase } from '../engine/ai-tf/pipeline';
 import wizardImg from '../assets/wizard.png';
 import jesterImg from '../assets/jester.png';
 
@@ -8,10 +7,10 @@ interface PlayerProps {
   player: PlayerType;
   isActive: boolean;
   isDealer: boolean;
-  biddingPhase?: AIPhase;
-  biddingConfidence?: number;
-  cardPlayPhase?: AIPhase;
-  cardPlayConfidence?: number;
+  predictedBid?: number;
+  chosenCard?: string;
+  top3Str?: string;
+  onOpenBrainPanel?: (playerId: number) => void;
 }
 
 const AVATAR_COLORS = ['#1565c0', '#c62828', '#2e7d32', '#6a1b9a'];
@@ -39,7 +38,7 @@ function MiniCardFace({ card }: { card: Card }) {
   );
 }
 
-export function Player({ player, isActive, isDealer, biddingPhase, biddingConfidence, cardPlayPhase, cardPlayConfidence }: PlayerProps) {
+export function Player({ player, isActive, isDealer, predictedBid, chosenCard, top3Str, onOpenBrainPanel }: PlayerProps) {
   const initial = player.name.charAt(0);
   const bgColor = AVATAR_COLORS[player.id];
 
@@ -55,10 +54,7 @@ export function Player({ player, isActive, isDealer, biddingPhase, biddingConfid
         const cardRot = MINI_CARD_ROTATION[player.position];
         const trickCards = player.tricks[i];
         return (
-          <div
-            key={i}
-            className="trick-pile has-trick"
-          >
+          <div key={i} className="trick-pile has-trick">
             <div className="card-back-mini" style={{ transform: cardRot }} />
             {trickCards && (
               <div className="trick-tooltip">
@@ -82,10 +78,7 @@ export function Player({ player, isActive, isDealer, biddingPhase, biddingConfid
         const cardRot = MINI_CARD_ROTATION[player.position];
         const trickCards = player.tricks[i];
         return (
-          <div
-            key={i}
-            className={`trick-pile ${hasChip ? 'has-chip' : ''} ${hasTrick ? 'has-trick' : ''} ${isOver ? 'over-trick' : ''}`}
-          >
+          <div key={i} className={`trick-pile ${hasChip ? 'has-chip' : ''} ${hasTrick ? 'has-trick' : ''} ${isOver ? 'over-trick' : ''}`}>
             {hasTrick && <div className="card-back-mini" style={{ transform: cardRot }} />}
             {hasChip && <div className="poker-chip" />}
             {!hasTrick && !hasChip && <div className="empty-pile" />}
@@ -119,34 +112,28 @@ export function Player({ player, isActive, isDealer, biddingPhase, biddingConfid
       </div>
       {!player.isHuman && (
         <div className="ai-phase-icons">
-            {biddingPhase && (
-              <div className="ai-phase-item" title={biddingPhase === 'neural'
-                ? `Bidding NN: ${Math.round((biddingConfidence ?? 0) * 100)}% confident`
-                : biddingPhase === 'shadow'
-                  ? 'Bidding: shadow mode'
-                  : 'Bidding: rule-based'
-              }>
-                <span className="ai-phase-label">B</span>
-                <span className={`ai-phase-icon ai-phase-${biddingPhase}`}>
-                  {biddingPhase === 'neural' ? '\uD83E\uDDE0' : biddingPhase === 'shadow' ? '\uD83D\uDC41' : '\u2699\uFE0F'}
-                </span>
-              </div>
-            )}
-            {cardPlayPhase && (
-              <div className="ai-phase-item" title={cardPlayPhase === 'neural'
-                ? `Card play NN: ${Math.round((cardPlayConfidence ?? 0) * 100)}% confident`
-                : cardPlayPhase === 'shadow'
-                  ? 'Card play: shadow mode'
-                  : 'Card play: rule-based'
-              }>
-                <span className="ai-phase-label">P</span>
-                <span className={`ai-phase-icon ai-phase-${cardPlayPhase}`}>
-                  {cardPlayPhase === 'neural' ? '\uD83E\uDDE0' : cardPlayPhase === 'shadow' ? '\uD83D\uDC41' : '\u2699\uFE0F'}
-                </span>
-              </div>
-            )}
-          </div>
-        )}
+          {predictedBid !== undefined && (
+            <div
+              className="ai-phase-item ai-phase-clickable"
+              title={`Predicted bid: ${predictedBid} tricks`}
+              onClick={() => onOpenBrainPanel?.(player.id)}
+            >
+              <span className="ai-phase-label">B</span>
+              <span className="ai-phase-icon">{'\u2699\uFE0F'}</span>
+            </div>
+          )}
+          {top3Str !== undefined && (
+            <div
+              className="ai-phase-item ai-phase-clickable"
+              title={top3Str ? `Best plays:\n${top3Str}\n\nChose: ${chosenCard}` : 'Brain panel'}
+              onClick={() => onOpenBrainPanel?.(player.id)}
+            >
+              <span className="ai-phase-label">P</span>
+              <span className="ai-phase-icon">{'\u2699\uFE0F'}</span>
+            </div>
+          )}
+        </div>
+      )}
       <div className="player-name">{player.name}</div>
     </div>
   );

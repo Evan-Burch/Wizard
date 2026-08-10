@@ -2,9 +2,7 @@ import { GameState, Card, Trick, Suit } from '../types';
 import { createDeck, shuffle, deal, sortHand } from './deck';
 import { determineTrickWinner } from './wizard';
 import { calculateScore } from './scoring';
-import { AIContext } from './ai';
-import { predictBid } from './ai-tf/bidding-model';
-import { predictCard } from './ai-tf/cardplay-model';
+import { AIContext, calculateBid, selectCard } from './ai';
 
 const PLAYER_NAMES = ['You', 'Mike', 'Lisa', 'Bill'];
 const PLAYER_POSITIONS = ['bottom', 'right', 'top', 'left'] as const;
@@ -314,14 +312,14 @@ export function handleAIPlayer(state: GameState): GameState {
   if (state.phase === 'bidding') {
     const player = state.players[state.currentPlayerIndex];
     const ctx = buildAIContext(state, state.currentPlayerIndex);
-    const bid = predictBid(player.hand, ctx);
+    const bid = calculateBid(player.hand, ctx);
     return handleBid(state, bid);
   }
 
   if (state.phase === 'playing') {
     const player = state.players[state.currentPlayerIndex];
     const ctx = buildAIContext(state, state.currentPlayerIndex);
-    const card = predictCard(player.hand, state.currentTrick, ctx);
+    const card = selectCard(player.hand, state.currentTrick, ctx);
     return handlePlayCard(state, card);
   }
 

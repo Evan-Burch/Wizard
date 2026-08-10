@@ -1,5 +1,5 @@
 import { Card, Suit, Trick } from '../../types';
-import { getRankValue } from '../deck';
+import { getRankValue } from '../../engine/deck';
 
 const SUIT_INDEX: Record<Suit, number> = {
   hearts: 0, spades: 13, diamonds: 26, clubs: 39,

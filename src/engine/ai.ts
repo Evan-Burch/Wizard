@@ -169,8 +169,56 @@ export function calculateBid(hand: Card[], ctx: AIContext): number {
     total += getCardScore(card.id, currentScores);
   }
 
+  // Opponents who already bid claim tricks from the same pool. If their total
+  // exceeds the tricks available they are overbidding and will bust (leaving us
+  // room to duck), while a low total means more tricks are unclaimed.
+  let othersBidTotal = 0;
+  for (let i = 0; i < ctx.allBids.length; i++) {
+    const b = ctx.allBids[i];
+    if (i !== ctx.playerIndex && b !== null) othersBidTotal += b;
+  }
+  const tricksAvailable = ctx.cardsPerPlayer;
+
+  if (othersBidTotal > tricksAvailable) {
+    total -= 0.25;
+  } else if (othersBidTotal < tricksAvailable) {
+    total += 0.15 * ((tricksAvailable - othersBidTotal) / tricksAvailable);
+  }
+
+  // Short hands swing more on luck — bid slightly under in 1-2 card rounds.
+  if (hand.length <= 2) {
+    total -= 0.3;
+  }
+
   const bid = Math.round(total);
   return Math.max(0, Math.min(bid, hand.length));
+}
+
+export function getCardPlayRankings(
+  hand: Card[],
+  trick: Trick,
+  ctx: AIContext,
+): { card: Card; score: number; willWin: boolean }[] {
+  const legalCards = hand.filter(c => canPlayCard(c, hand, trick.leadSuit, ctx.trumpSuit));
+  const initialScores = calculateInitialScores(hand, ctx.trumpSuit);
+  const currentScores = reevaluateScores(initialScores, hand, ctx.cardsPlayed, ctx.trumpSuit);
+
+  const needsMoreTricks = ctx.tricksWon < ctx.bid;
+
+  return legalCards
+    .map(c => ({
+      card: c,
+      score: getCardScore(c.id, currentScores),
+      willWin: wouldWinCard(c, trick, ctx),
+    }))
+    .sort((a, b) => {
+      if (needsMoreTricks) {
+        if (a.willWin !== b.willWin) return a.willWin ? -1 : 1;
+        return a.score - b.score;
+      }
+      if (a.willWin !== b.willWin) return a.willWin ? 1 : -1;
+      return a.score - b.score;
+    });
 }
 
 export function selectCard(hand: Card[], trick: Trick, ctx: AIContext): Card {

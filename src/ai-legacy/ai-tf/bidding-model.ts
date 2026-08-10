@@ -2,12 +2,13 @@ import * as tf from '@tensorflow/tfjs';
 import { Card } from '../../types';
 import { encodeBiddingInput } from './features';
 import { getBiddingModel, getIsTraining, getModelsReady } from './pipeline';
-import { calculateBid as ruleBasedBid, AIContext } from '../ai';
+import { calculateBid as ruleBasedBid, AIContext } from '../../engine/ai';
 
 export function predictBid(hand: Card[], ctx: AIContext): number {
   const model = getBiddingModel();
   if (!model || !getModelsReady() || getIsTraining()) {
-    return ruleBasedBid(hand, ctx);
+    const fallback = ruleBasedBid(hand, ctx);
+    return fallback;
   }
 
   const features = encodeBiddingInput(
@@ -22,7 +23,15 @@ export function predictBid(hand: Card[], ctx: AIContext): number {
   tf.dispose([inputTensor, prediction]);
 
   const bid = Math.round(rawValue * ctx.cardsPerPlayer);
-  return Math.max(0, Math.min(bid, ctx.cardsPerPlayer));
+  const clamped = Math.max(0, Math.min(bid, ctx.cardsPerPlayer));
+
+  const handStr = hand.map(c => `${c.rank ?? ''}${c.suit ?? ''}${c.special ?? ''}`).join(',');
+  console.log(
+    `[Bid NN] P${ctx.playerIndex} hand:[${handStr}] trump=${ctx.trumpSuit ?? 'none'} ` +
+    `cardsPerPlayer=${ctx.cardsPerPlayer} => raw=${rawValue.toFixed(3)} bid=${clamped}`
+  );
+
+  return clamped;
 }
 
 export function predictBidConfidence(_hand: Card[], _ctx: AIContext): number {
