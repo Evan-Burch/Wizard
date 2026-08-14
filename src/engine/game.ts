@@ -4,17 +4,26 @@ import { determineTrickWinner } from './wizard';
 import { calculateScore } from './scoring';
 import { AIContext, calculateBid, selectCard } from './ai';
 
-const PLAYER_NAMES = ['You', 'Mike', 'Lisa', 'Bill'];
+const PLAYER_NAMES = ['You', 'Mike', 'Lisa', 'Bill', 'Sarah', 'Alex'];
 const PLAYER_POSITIONS = ['bottom', 'right', 'top', 'left'] as const;
 
-export function createInitialState(): GameState {
-  const dealerIndex = Math.floor(Math.random() * 4);
+export function maxRounds(playerCount: number): number {
+  return Math.floor(60 / playerCount);
+}
+
+function seatPosition(i: number, playerCount: number): string {
+  if (playerCount === 4) return PLAYER_POSITIONS[i];
+  return `seat-${i}`;
+}
+
+export function createInitialState(playerCount = 4): GameState {
+  const dealerIndex = Math.floor(Math.random() * playerCount);
   return {
     phase: 'waiting',
-    players: PLAYER_NAMES.map((name, i) => ({
+    players: Array.from({ length: playerCount }, (_, i) => ({
       id: i,
-      name,
-      position: PLAYER_POSITIONS[i],
+      name: PLAYER_NAMES[i % PLAYER_NAMES.length],
+      position: seatPosition(i, playerCount),
       hand: [],
       tricks: [],
       bid: null,
@@ -22,6 +31,7 @@ export function createInitialState(): GameState {
       score: 0,
       isHuman: i === 0,
     })),
+    playerCount,
     round: 0,
     cardsPerPlayer: 0,
     dealerIndex,
@@ -32,17 +42,18 @@ export function createInitialState(): GameState {
     tricksPlayed: 0,
     trickJustResolved: false,
     trickWinners: [],
-    scoreHistory: [[], [], [], []],
+    scoreHistory: Array.from({ length: playerCount }, () => []),
     message: 'Click Deal to start the game.',
   };
 }
 
 export function startRound(state: GameState): GameState {
+  const playerCount = state.players.length;
   const round = state.round + 1;
   const cardsPerPlayer = round;
-  const dealerIndex = (state.dealerIndex + 3) % 4;
+  const dealerIndex = (state.dealerIndex + playerCount - 1) % playerCount;
   const deck = shuffle(createDeck());
-  const { hands, remaining } = deal(deck, cardsPerPlayer, 4);
+  const { hands, remaining } = deal(deck, cardsPerPlayer, playerCount);
 
   const players = state.players.map((p, i) => ({
     ...p,
@@ -56,7 +67,7 @@ export function startRound(state: GameState): GameState {
   let phase: GameState['phase'] = 'bidding';
   let flippedCard: Card | null = null;
 
-  if (cardsPerPlayer === 15) {
+  if (cardsPerPlayer === maxRounds(playerCount)) {
     phase = 'bidding';
     trumpSuit = null;
   } else {
@@ -73,7 +84,7 @@ export function startRound(state: GameState): GameState {
     }
   }
 
-  const firstPlayerIndex = (dealerIndex + 3) % 4;
+  const firstPlayerIndex = (dealerIndex + playerCount - 1) % playerCount;
 
   const trumpNames: Record<string, string> = {
     hearts: '\u2665 Hearts', diamonds: '\u2666 Diamonds',
@@ -113,7 +124,8 @@ export function startRound(state: GameState): GameState {
 }
 
 export function handleSelectTrump(state: GameState, suit: Suit): GameState {
-  const firstPlayerIndex = (state.dealerIndex + 3) % 4;
+  const playerCount = state.players.length;
+  const firstPlayerIndex = (state.dealerIndex + playerCount - 1) % playerCount;
   const trumpNames: Record<string, string> = {
     hearts: '\u2665 Hearts', diamonds: '\u2666 Diamonds',
     clubs: '\u2663 Clubs', spades: '\u2660 Spades',
@@ -128,11 +140,12 @@ export function handleSelectTrump(state: GameState, suit: Suit): GameState {
 }
 
 export function handleBid(state: GameState, bid: number): GameState {
+  const playerCount = state.players.length;
   const players = state.players.map((p, i) =>
     i === state.currentPlayerIndex ? { ...p, bid } : p
   );
 
-  const nextIndex = (state.currentPlayerIndex + 3) % 4;
+  const nextIndex = (state.currentPlayerIndex + playerCount - 1) % playerCount;
   const allBidded = players.every(p => p.bid !== null);
 
   if (allBidded) {
@@ -140,7 +153,7 @@ export function handleBid(state: GameState, bid: number): GameState {
       ...state,
       players,
       phase: 'playing',
-      currentPlayerIndex: (state.dealerIndex + 3) % 4,
+      currentPlayerIndex: (state.dealerIndex + playerCount - 1) % playerCount,
       message: `Bids: ${players.map(p => `${p.name}: ${p.bid}`).join(', ')}. Play a card!`,
     };
   }
@@ -155,6 +168,7 @@ export function handleBid(state: GameState, bid: number): GameState {
 }
 
 export function handlePlayCard(state: GameState, card: Card): GameState {
+  const playerCount = state.players.length;
   const player = state.players[state.currentPlayerIndex];
   const newHand = player.hand.filter(c => c.id !== card.id);
 
@@ -178,7 +192,7 @@ export function handlePlayCard(state: GameState, card: Card): GameState {
     i === state.currentPlayerIndex ? { ...p, hand: newHand } : p
   );
 
-  if (trick.cards.length === 4) {
+  if (trick.cards.length === playerCount) {
     return {
       ...state,
       players,
@@ -189,7 +203,7 @@ export function handlePlayCard(state: GameState, card: Card): GameState {
     };
   }
 
-  const nextIndex = (state.currentPlayerIndex + 3) % 4;
+  const nextIndex = (state.currentPlayerIndex + playerCount - 1) % playerCount;
 
   return {
     ...state,
@@ -204,13 +218,18 @@ export function handlePlayCard(state: GameState, card: Card): GameState {
 export function handleTrickPause(state: GameState): GameState {
   const winnerId = determineTrickWinner(state.currentTrick, state.trumpSuit);
 
+  const wonCards = state.currentTrick.cards.map(tc => tc.card);
+  const winnerIndex = state.currentTrick.cards.findIndex(tc => tc.playerId === winnerId);
+
   const players = state.players.map((p) => {
     if (winnerId === null) return p;
-    const wonCards = state.currentTrick.cards.map(tc => tc.card);
     return {
       ...p,
       tricksWon: p.id === winnerId ? p.tricksWon + 1 : p.tricksWon,
-      tricks: p.id === winnerId ? [...p.tricks, wonCards] : p.tricks,
+      tricks:
+        p.id === winnerId && winnerIndex >= 0
+          ? [...p.tricks, { cards: wonCards, winnerIndex }]
+          : p.tricks,
     };
   });
 
@@ -250,7 +269,7 @@ function handleEndOfRound(state: GameState): GameState {
     };
   });
 
-  const gameOver = state.round >= 15;
+  const gameOver = state.round >= maxRounds(state.players.length);
 
   return {
     ...state,
@@ -262,7 +281,7 @@ function handleEndOfRound(state: GameState): GameState {
 }
 
 export function handleContinueRound(state: GameState): GameState {
-  if (state.round >= 15) {
+  if (state.round >= maxRounds(state.players.length)) {
     return { ...state, phase: 'game-over' };
   }
   return startRound(state);
@@ -274,7 +293,7 @@ export function buildAIContext(state: GameState, playerIndex: number): AIContext
   const cardsPlayed: Card[] = [];
   for (const p of state.players) {
     for (const trick of p.tricks) {
-      cardsPlayed.push(...trick);
+      cardsPlayed.push(...trick.cards);
     }
   }
   for (const { card } of state.currentTrick.cards) {
@@ -330,7 +349,7 @@ export function collectAllCardsPlayed(state: GameState): Card[] {
   const cardsPlayed: Card[] = [];
   for (const p of state.players) {
     for (const trick of p.tricks) {
-      cardsPlayed.push(...trick);
+      cardsPlayed.push(...trick.cards);
     }
   }
   for (const { card } of state.currentTrick.cards) {

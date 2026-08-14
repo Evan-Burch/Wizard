@@ -11,12 +11,17 @@ export interface Card {
 
 export type PlayerPosition = 'bottom' | 'right' | 'top' | 'left';
 
+export interface WonTrick {
+  cards: Card[];
+  winnerIndex: number;
+}
+
 export interface Player {
   id: number;
   name: string;
-  position: PlayerPosition;
+  position: PlayerPosition | string;
   hand: Card[];
-  tricks: Card[][];
+  tricks: WonTrick[];
   bid: number | null;
   tricksWon: number;
   score: number;
@@ -49,6 +54,7 @@ export interface Trick {
 export interface GameState {
   phase: GamePhase;
   players: Player[];
+  playerCount: number;
   round: number;
   cardsPerPlayer: number;
   dealerIndex: number;

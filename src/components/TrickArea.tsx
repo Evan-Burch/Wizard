@@ -1,17 +1,17 @@
-import { Trick, Suit, PlayerPosition } from '../types';
+import { Trick, Suit } from '../types';
 import { Card } from './Card';
 
 interface TrickAreaProps {
   trick: Trick;
   trumpSuit: Suit | null;
-  playerPositions: Record<number, PlayerPosition>;
+  playerPositions: Record<number, string>;
 }
 
-const PLAYER_OFFSETS: Record<PlayerPosition, { x: number; y: number }> = {
-  bottom: { x: 0, y: 50 },
-  left:   { x: -50, y: 0 },
-  top:    { x: 0, y: -50 },
-  right:  { x: 50, y: 0 },
+const PLAYER_OFFSETS: Record<string, { x: number; y: number }> = {
+  bottom: { x: 0, y: 40 },
+  left:   { x: -40, y: 0 },
+  top:    { x: 0, y: -40 },
+  right:  { x: 40, y: 0 },
 };
 
 export function TrickArea({ trick, trumpSuit: _trumpSuit, playerPositions }: TrickAreaProps) {
@@ -21,7 +21,7 @@ export function TrickArea({ trick, trumpSuit: _trumpSuit, playerPositions }: Tri
     <div className="trick-area">
       {trick.cards.map(({ playerId, card }, index) => {
         const pos = playerPositions[playerId] || 'bottom';
-        const offset = PLAYER_OFFSETS[pos];
+        const offset = PLAYER_OFFSETS[pos] ?? PLAYER_OFFSETS.bottom;
 
         return (
           <div

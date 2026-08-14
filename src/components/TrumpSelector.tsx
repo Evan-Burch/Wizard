@@ -14,20 +14,20 @@ const SUIT_INFO: Record<Suit, { symbol: string; color: string }> = {
 
 export function TrumpSelector({ onSelect, availableSuits }: TrumpSelectorProps) {
   return (
-    <div className="trump-selector">
-      <div className="trump-selector-label">Pick a trump suit:</div>
-      <div className="trump-selector-buttons">
+    <div className="popup-panel absolute top-1/2 left-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-2.5 bg-white px-5 py-3.5">
+      <div className="text-sm font-bold text-gray-900">Pick a trump suit:</div>
+      <div className="flex gap-2.5">
         {availableSuits.map((suit) => {
           const { symbol, color } = SUIT_INFO[suit];
           return (
             <button
               key={suit}
-              className="trump-suit-btn"
+              className="flex cursor-pointer flex-col items-center gap-1 rounded border border-gray-300 bg-gray-50 px-3.5 py-2.5 transition-all hover:scale-105 hover:border-gray-400 hover:bg-gray-100"
               style={{ color }}
               onClick={() => onSelect(suit)}
             >
-              <span className="trump-suit-btn-symbol">{symbol}</span>
-              <span className="trump-suit-btn-name">{suit.charAt(0).toUpperCase() + suit.slice(1)}</span>
+              <span className="text-[28px] leading-none">{symbol}</span>
+              <span className="text-[11px] text-gray-600">{suit.charAt(0).toUpperCase() + suit.slice(1)}</span>
             </button>
           );
         })}

@@ -10,10 +10,11 @@ import {
   handleContinueRound,
   buildAIContext,
 } from './engine/game';
-import { calculateBid, selectCard, getCardPlayRankings } from './engine/ai';
-import { canPlayCard, compactCardDisplay } from './engine/wizard';
-import { Hand } from './components/Hand';
+import { selectCard, getCardPlayRankings } from './engine/ai';
+import { canPlayCard } from './engine/wizard';
+import { maxRounds } from './engine/game';
 import { Player } from './components/Player';
+import { PlayerCountSelector } from './components/PlayerCountSelector';
 import { BrainPanel } from './components/BrainPanel';
 import { TrickArea } from './components/TrickArea';
 import { TrumpIndicator } from './components/TrumpIndicator';
@@ -21,8 +22,8 @@ import { TrumpSelector } from './components/TrumpSelector';
 import { BidSelector } from './components/BidSelector';
 import { Scoreboard } from './components/Scoreboard';
 import { PersistentScoreboard } from './components/PersistentScoreboard';
-import wizardImg from './assets/wizard.png';
-import jesterImg from './assets/jester.png';
+import { animateOverlayIn, animatePopupIn } from './lib/animation';
+import gearImg from './assets/gear.svg';
 import './index.css';
 
 interface TrickInsight {
@@ -37,32 +38,22 @@ interface TrickInsight {
   completedTrick?: import('./types').Card[];
 }
 
-function MiniCardFace({ card }: { card: import('./types').Card }) {
-  if (card.special === 'wizard') {
-    return <div className="tooltip-card wizard"><img src={wizardImg} alt="W" className="tooltip-card-img" /></div>;
-  }
-  if (card.special === 'jester') {
-    return <div className="tooltip-card jester"><img src={jesterImg} alt="J" className="tooltip-card-img" /></div>;
-  }
-  const color = (card.suit === 'hearts' || card.suit === 'diamonds') ? '#d40000' : '#1a1a2e';
-  const symbols: Record<string, string> = { hearts: '\u2665', diamonds: '\u2666', clubs: '\u2663', spades: '\u2660' };
-  return (
-    <div className="tooltip-card face" style={{ color }}>
-      <span>{card.rank}</span>
-      <span>{symbols[card.suit!]}</span>
-    </div>
-  );
-}
+const INSIGHTS_KEY = 'wizard.showInsights';
 
 function App() {
   const [scoreboardMinimized, setScoreboardMinimized] = useState(false);
-  const [aiHints, setAiHints] = useState<Record<number, {
-    predictedBid?: number;
-    chosenCard?: string;
-    topStr?: string;
-  }>>({});
   const [brainPanelPlayer, setBrainPanelPlayer] = useState<number | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showInsights, setShowInsights] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(INSIGHTS_KEY) !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const trickInsightsRef = useRef<Record<number, TrickInsight[]>>({});
+  const settingsOverlayRef = useRef<HTMLDivElement>(null);
+  const settingsPopupRef = useRef<HTMLDivElement>(null);
 
   const [state, dispatch] = useReducer(
     (s: ReturnType<typeof createInitialState>, action: { type: string; payload?: unknown }) => {
@@ -84,12 +75,15 @@ function App() {
           setScoreboardMinimized(false);
           return handleContinueRound(s);
         }
-        case 'RESET': return createInitialState();
+        case 'SET_PLAYER_COUNT': {
+          const count = action.payload as number;
+          return createInitialState(count);
+        }
+        case 'RESET': return createInitialState(s.playerCount);
         default: return s;
       }
     },
-    null,
-    createInitialState
+    createInitialState()
   );
 
   const currentPlayer = state.players[state.currentPlayerIndex];
@@ -120,19 +114,9 @@ function App() {
         if (cp && !cp.isHuman) {
           const ctx = buildAIContext(state, state.currentPlayerIndex);
 
-          if (state.phase === 'bidding') {
-            const bid = calculateBid(cp.hand, ctx);
-            setAiHints(prev => ({ ...prev, [cp.id]: { ...prev[cp.id], predictedBid: bid } }));
-          } else if (state.phase === 'playing') {
+          if (state.phase === 'playing') {
             const card = selectCard(cp.hand, state.currentTrick, ctx);
             const rankings = getCardPlayRankings(cp.hand, state.currentTrick, ctx);
-            const topStr = rankings.slice(0, 3).map((r, i) =>
-              `  ${i + 1}. ${compactCardDisplay(r.card)} — ${(r.score * 100).toFixed(0)}%${r.willWin ? ' WIN' : ' lose'}`
-            ).join('\n');
-            setAiHints(prev => ({
-              ...prev,
-              [cp.id]: { ...prev[cp.id], chosenCard: compactCardDisplay(card), topStr },
-            }));
             const playerInsights = trickInsightsRef.current[cp.id] ?? [];
             trickInsightsRef.current = {
               ...trickInsightsRef.current,
@@ -142,7 +126,7 @@ function App() {
                 tricksWonBefore: ctx.tricksWon,
                 bid: ctx.bid,
                 cardsPlayedSoFar: state.currentTrick.cards.map(tc => tc.card),
-                playersLeft: 4 - state.currentTrick.cards.length - 1,
+                playersLeft: state.players.length - state.currentTrick.cards.length - 1,
                 bestPlays: rankings,
                 chosenCard: card,
               }],
@@ -164,6 +148,13 @@ function App() {
     }
   }, [shouldDelayAI, state.tricksPlayed]);
 
+  useEffect(() => {
+    if (settingsOpen) {
+      if (settingsOverlayRef.current) animateOverlayIn(settingsOverlayRef.current);
+      if (settingsPopupRef.current) animatePopupIn(settingsPopupRef.current);
+    }
+  }, [settingsOpen]);
+
   const handleCardClick = useCallback(
     (card: import('./types').Card) => {
       if (state.phase !== 'playing' || !currentPlayer?.isHuman) return;
@@ -184,7 +175,7 @@ function App() {
 
   const playerPositions = Object.fromEntries(
     state.players.map(p => [p.id, p.position])
-  ) as Record<number, import('./types').PlayerPosition>;
+  ) as Record<number, string>;
 
   const [currentInsightRound, setCurrentInsightRound] = useState(0);
   useEffect(() => {
@@ -194,200 +185,197 @@ function App() {
     }
   }, [state.round]);
 
+  const toggleInsights = (enabled: boolean) => {
+    setShowInsights(enabled);
+    try {
+      localStorage.setItem(INSIGHTS_KEY, enabled ? 'true' : 'false');
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
     <div className="game-table">
-      <div className="game-header">
-        <div className="game-title">Wizard</div>
-        <div className="game-header-info">
-          <span>Round {state.round}/15</span>
+      <div className="absolute top-1 left-1/2 z-[70] -translate-x-1/2 text-center">
+        <div className="text-lg font-extrabold uppercase tracking-widest text-[#1a3a5c]">Wizard</div>
+      </div>
+      <PlayerCountSelector
+        value={state.players.length}
+        onChange={(count) => dispatch({ type: 'SET_PLAYER_COUNT', payload: count })}
+        disabled={state.round > 0 && state.phase !== 'game-over'}
+      />
+      <div className="table-felt">
+        <div className="absolute top-2.5 right-3 z-[30] flex items-center gap-3 rounded-full bg-white/95 px-4 py-1.5 text-xs text-[#1a3a5c] shadow-md">
+          <span className="font-bold">Round {state.round}/{maxRounds(state.players.length)}</span>
           {state.round > 0 && state.phase !== 'game-over' && (
-            <button className="restart-btn" onClick={() => dispatch({ type: 'RESET' })}>
+            <button
+              className="cursor-pointer rounded-md border border-[#1a3a5c]/40 bg-white px-2.5 py-0.5 text-xs font-bold text-[#1a3a5c] transition-all hover:bg-red-100 hover:text-red-600"
+              onClick={() => dispatch({ type: 'RESET' })}
+            >
               Restart
             </button>
           )}
-        </div>
-      </div>
-
-      {brainPanelPlayer !== null && (
-        <BrainPanel
-          player={state.players[brainPanelPlayer]}
-          insights={trickInsightsRef.current[brainPanelPlayer] ?? []}
-          defaultTab={state.tricksPlayed}
-          onClose={() => setBrainPanelPlayer(null)}
-        />
-      )}
-
-      <TrumpIndicator trumpSuit={state.trumpSuit} flippedCard={state.flippedCard} />
-
-      {state.players.filter(p => p.position !== 'bottom').map((player) => (
-        <Player
-          key={player.id}
-          player={player}
-          isActive={state.currentPlayerIndex === player.id}
-          isDealer={state.dealerIndex === player.id}
-          predictedBid={aiHints[player.id]?.predictedBid}
-          chosenCard={aiHints[player.id]?.chosenCard}
-          top3Str={aiHints[player.id]?.topStr}
-          onOpenBrainPanel={setBrainPanelPlayer}
-        />
-      ))}
-
-      <TrickArea
-        trick={state.currentTrick}
-        trumpSuit={state.trumpSuit}
-        playerPositions={playerPositions}
-      />
-
-      <div className="player-info player-bottom">
-        {state.players[0]?.bid !== null && (
-          <div className="trick-tracker">
-            {state.players[0]?.bid === 0 ? (
-              <>
-                <div className="bid-zero">0</div>
-                {Array.from({ length: state.players[0]?.tricksWon ?? 0 }).map((_, i) => {
-                  const trickCards = state.players[0]?.tricks[i];
-                  return (
-                    <div key={i} className="trick-pile has-trick">
-                      <div className="card-back-mini" style={{ transform: 'rotate(0deg)' }} />
-                      {trickCards && (
-                        <div className="trick-tooltip">
-                          <div className="tooltip-cards">
-                            {trickCards.map((c) => (
-                              <MiniCardFace key={c.id} card={c} />
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </>
-            ) : Array.from({ length: Math.max(state.players[0]?.bid ?? 0, state.players[0]?.tricksWon ?? 0) }).map((_, i) => {
-              const bidTokens = state.players[0]?.bid ?? 0;
-              const wonTricks = state.players[0]?.tricksWon ?? 0;
-              const hasChip = i < bidTokens;
-              const hasTrick = i < wonTricks;
-              const isOver = i >= bidTokens;
-              const trickCards = state.players[0]?.tricks[i];
-              return (
-                <div
-                  key={i}
-                  className={`trick-pile ${hasChip ? 'has-chip' : ''} ${hasTrick ? 'has-trick' : ''} ${isOver ? 'over-trick' : ''}`}
-                >
-                  {hasTrick && <div className="card-back-mini" style={{ transform: 'rotate(0deg)' }} />}
-                  {hasChip && <div className="poker-chip" />}
-                  {!hasTrick && !hasChip && <div className="empty-pile" />}
-                  {hasTrick && trickCards && (
-                    <div className="trick-tooltip">
-                      <div className="tooltip-cards">
-                        {trickCards.map((c) => (
-                          <MiniCardFace key={c.id} card={c} />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <div className="player-name">
-          {state.players[0]?.name}
-          {state.dealerIndex === 0 && <div className="dealer-marker">D</div>}
-        </div>
-      </div>
-
-      <Hand
-        cards={state.players[0]?.hand ?? []}
-        position="bottom"
-        onCardClick={handleCardClick}
-        playableIds={state.phase === 'playing' && currentPlayer?.isHuman ? playableIds : undefined}
-      />
-
-      {state.round > 0 && (
-        <>
-          <PersistentScoreboard players={state.players} />
-        </>
-      )}
-
-      <div className="message-bar">{state.message}</div>
-
-      {state.phase === 'waiting' && (
-        <button className="deal-btn" onClick={() => dispatch({ type: 'DEAL' })}>
-          Deal
-        </button>
-      )}
-
-      {state.phase === 'trump-select' && currentPlayer?.isHuman && (
-        <TrumpSelector
-          onSelect={(suit) => dispatch({ type: 'SELECT_TRUMP', payload: suit })}
-          availableSuits={
-            [...new Set(
-              currentPlayer.hand
-                .filter(c => c.suit !== null && !c.special)
-                .map(c => c.suit as import('./types').Suit)
-            )]
-          }
-        />
-      )}
-
-      {state.phase === 'bidding' && currentPlayer?.isHuman && currentPlayer.bid === null && (
-        <BidSelector
-          maxBid={state.cardsPerPlayer}
-          onSelect={(bid) => dispatch({ type: 'BID', payload: bid })}
-        />
-      )}
-
-      {state.phase === 'scoring' && !scoreboardMinimized && (
-        <Scoreboard
-          players={state.players}
-          round={state.round}
-          scoreHistory={state.scoreHistory}
-          onContinue={() => dispatch({ type: 'CONTINUE' })}
-          onMinimize={() => setScoreboardMinimized(true)}
-        />
-      )}
-
-      {state.phase === 'scoring' && scoreboardMinimized && (
-        <button
-          className="scoreboard-restore-btn"
-          onClick={() => setScoreboardMinimized(false)}
-        >
-          Show Scoreboard
-        </button>
-      )}
-
-      {state.phase === 'game-over' && (
-        <div className="game-over">
-          <h1>Game Over!</h1>
-          <h2>Final Scores</h2>
-          <div className="final-scores">
-            <table className="score-table">
-              <thead>
-                <tr>
-                  <th>Player</th>
-                  <th>Score</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...state.players]
-                  .sort((a, b) => b.score - a.score)
-                  .map((p, i) => (
-                    <tr key={p.id}>
-                      <td>{i === 0 ? '\uD83C\uDFC6 ' : ''}{p.name}</td>
-                      <td className={p.score >= 0 ? 'score-positive' : 'score-negative'}>
-                        {p.score}
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-          <button className="deal-btn" onClick={() => dispatch({ type: 'RESET' })}>
-            New Game
+          <button
+            className="flex h-[26px] w-[26px] cursor-pointer items-center justify-center rounded-full opacity-85 transition-all duration-300 hover:rotate-90 hover:opacity-100"
+            title="Settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <img src={gearImg} alt="Settings" className="h-5 w-5" />
           </button>
         </div>
-      )}
+
+        {brainPanelPlayer !== null && (
+          <BrainPanel
+            player={state.players[brainPanelPlayer]}
+            insights={trickInsightsRef.current[brainPanelPlayer] ?? []}
+            defaultTab={state.tricksPlayed}
+            onClose={() => setBrainPanelPlayer(null)}
+          />
+        )}
+
+        {settingsOpen && (
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
+            ref={settingsOverlayRef}
+            onClick={() => setSettingsOpen(false)}
+          >
+            <div
+              className="popup-panel w-[400px] max-w-[92vw] bg-white p-5"
+              ref={settingsPopupRef}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="mb-3.5 flex items-center justify-between">
+                <h2 className="m-0 text-base font-bold text-gray-900">Settings</h2>
+                <button className="bp-close" onClick={() => setSettingsOpen(false)}>×</button>
+              </div>
+              <label className="flex cursor-pointer items-center justify-between gap-4">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[13px] font-semibold text-gray-900">Show AI Decision Insights</span>
+                  <span className="text-[11px] text-gray-500">Click an opponent's avatar to inspect their AI reasoning.</span>
+                </div>
+                <input
+                  type="checkbox"
+                  className="h-[18px] w-[18px] cursor-pointer accent-[#64b4ff]"
+                  checked={showInsights}
+                  onChange={e => toggleInsights(e.target.checked)}
+                />
+              </label>
+            </div>
+          </div>
+        )}
+
+        <TrumpIndicator trumpSuit={state.trumpSuit} flippedCard={state.flippedCard} />
+
+        {state.players.map((player) => (
+          <Player
+            key={player.id}
+            player={player}
+            isActive={state.currentPlayerIndex === player.id}
+            isDealer={state.dealerIndex === player.id}
+            cardsPerPlayer={state.cardsPerPlayer}
+            tricksPlayed={state.tricksPlayed}
+            insightsEnabled={showInsights}
+            onOpenBrainPanel={setBrainPanelPlayer}
+            onCardClick={handleCardClick}
+            playableIds={state.phase === 'playing' && currentPlayer?.isHuman ? playableIds : undefined}
+          />
+        ))}
+
+        <TrickArea
+          trick={state.currentTrick}
+          trumpSuit={state.trumpSuit}
+          playerPositions={playerPositions}
+        />
+
+        {state.round > 0 && (
+          <PersistentScoreboard players={state.players} />
+        )}
+
+        <div className="absolute left-1/2 z-[5] -translate-x-1/2 rounded bg-[#edf35a] px-1.5 py-0.5 text-[12px] text-gray-800 whitespace-nowrap" style={{ top: '64%' }}>{state.message}</div>
+
+        {state.phase === 'waiting' && (
+          <button
+            className="deal-btn absolute top-1/2 left-1/2 z-20 -translate-x-1/2 -translate-y-1/2"
+            onClick={() => dispatch({ type: 'DEAL' })}
+          >
+            Deal
+          </button>
+        )}
+
+        {state.phase === 'trump-select' && currentPlayer?.isHuman && (
+          <TrumpSelector
+            onSelect={(suit) => dispatch({ type: 'SELECT_TRUMP', payload: suit })}
+            availableSuits={
+              [...new Set(
+                currentPlayer.hand
+                  .filter(c => c.suit !== null && !c.special)
+                  .map(c => c.suit as import('./types').Suit)
+              )]
+            }
+          />
+        )}
+
+        {state.phase === 'bidding' && currentPlayer?.isHuman && currentPlayer.bid === null && (
+          <BidSelector
+            maxBid={state.cardsPerPlayer}
+            onSelect={(bid) => dispatch({ type: 'BID', payload: bid })}
+          />
+        )}
+
+        {state.phase === 'scoring' && !scoreboardMinimized && (
+          <Scoreboard
+            players={state.players}
+            round={state.round}
+            scoreHistory={state.scoreHistory}
+            onContinue={() => dispatch({ type: 'CONTINUE' })}
+            onMinimize={() => setScoreboardMinimized(true)}
+          />
+        )}
+
+        {state.phase === 'scoring' && scoreboardMinimized && (
+          <button
+            className="absolute bottom-33 left-1/2 z-40 -translate-x-1/2 cursor-pointer rounded border border-gray-400 bg-white px-4 py-1.5 text-sm font-bold text-gray-800 transition-all hover:bg-gray-100"
+            onClick={() => setScoreboardMinimized(false)}
+          >
+            Show Scoreboard
+          </button>
+        )}
+
+        {state.phase === 'game-over' && (
+          <div className="fixed inset-0 z-[80] flex flex-col items-center justify-center bg-black/50">
+            <h1 className="mb-2.5 text-[32px] font-bold text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">Game Over!</h1>
+            <h2 className="mb-6 text-xl text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">Final Scores</h2>
+            <div className="mb-8">
+              <table className="score-table">
+                <thead>
+                  <tr>
+                    <th className="text-white">Player</th>
+                    <th className="text-white">Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...state.players]
+                    .sort((a, b) => b.score - a.score)
+                    .map((p, i) => (
+                      <tr key={p.id}>
+                        <td className="text-white">{i === 0 ? '\uD83C\uDFC6 ' : ''}{p.name}</td>
+                        <td className={p.score >= 0 ? 'text-[#8dffa5]' : 'text-[#ff8a80]'}>
+                          {p.score}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+            <button
+              className="deal-btn absolute top-1/2 left-1/2 z-20 -translate-x-1/2 -translate-y-1/2"
+              onClick={() => dispatch({ type: 'RESET' })}
+            >
+              New Game
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

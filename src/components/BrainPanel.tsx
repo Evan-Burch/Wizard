@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Player as PlayerType, Card } from '../types';
 import { getSuitSymbol } from '../engine/wizard';
+import { animateOverlayIn, animatePopupIn } from '../lib/animation';
 import wizardImg from '../assets/wizard.png';
 import jesterImg from '../assets/jester.png';
 
@@ -39,6 +40,14 @@ function MiniCard({ card, highlight }: { card: Card; highlight?: boolean }) {
 }
 
 export function BrainPanel({ player, insights, defaultTab, onClose }: Props) {
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (overlayRef.current) animateOverlayIn(overlayRef.current);
+    if (panelRef.current) animatePopupIn(panelRef.current);
+  }, []);
+
   const maxTrick = insights.length > 0 ? Math.max(...insights.map(i => i.trickIndex)) : 0;
   const initialTab = defaultTab > 0 && defaultTab <= maxTrick ? defaultTab : maxTrick;
   const [activeTab, setActiveTab] = useState(Math.max(0, initialTab));
@@ -55,22 +64,26 @@ export function BrainPanel({ player, insights, defaultTab, onClose }: Props) {
     : '';
 
   return (
-    <div className="bp-overlay" onClick={onClose}>
-      <div className="bp-panel" onClick={e => e.stopPropagation()}>
-        <div className="bp-header">
-          <h2 className="bp-title">{player.name} — Trick Insights</h2>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" ref={overlayRef} onClick={onClose}>
+      <div className="popup-panel max-h-[90vh] w-[520px] max-w-[95vw] overflow-y-auto bg-white p-5" ref={panelRef} onClick={e => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="m-0 text-base font-bold text-gray-900">{player.name} — Trick Insights</h2>
           <button className="bp-close" onClick={onClose}>×</button>
         </div>
 
         {insights.length === 0 ? (
-          <div className="bp-empty">No data yet for this round.</div>
+          <div className="py-10 text-center text-sm text-gray-400">No data yet for this round.</div>
         ) : (
           <>
-            <div className="bp-tab-bar">
+            <div className="mb-4 flex flex-wrap gap-1">
               {Array.from({ length: maxTrick + 1 }).map((_, i) => (
                 <button
                   key={i}
-                  className={`bp-tab ${activeTab === i ? 'bp-tab-active' : ''}`}
+                  className={`cursor-pointer rounded border px-3 py-1.5 text-xs transition-all ${
+                    activeTab === i
+                      ? 'border-blue-300 bg-blue-50 text-blue-600'
+                      : 'border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100 hover:text-gray-700'
+                  }`}
                   onClick={() => setActiveTab(i)}
                 >
                   Trick {i + 1}
@@ -79,56 +92,67 @@ export function BrainPanel({ player, insights, defaultTab, onClose }: Props) {
             </div>
 
             {insight && (
-              <div className="bp-content">
-                <div className="bp-section">
-                  <div className="bp-section-label">Hand at trick start:</div>
-                  <div className="bp-card-row">
+              <div className="flex flex-col gap-3.5">
+                <div className="flex flex-col gap-1.5">
+                  <div className="text-[11px] font-semibold tracking-wide text-gray-400 uppercase">Hand at trick start:</div>
+                  <div className="flex flex-wrap gap-1.5">
                     {insight.handAtStart.map(c => (
                       <MiniCard key={c.id} card={c} highlight={c.id === insight.chosenCard.id} />
                     ))}
                   </div>
                 </div>
 
-                <div className="bp-section">
-                  <div className="bp-section-label">Tricks needed:</div>
-                  <div className={`bp-value ${tricksNeeded < 0 ? 'bp-negative' : ''}`}>
+                <div className="flex flex-col gap-1.5">
+                  <div className="text-[11px] font-semibold tracking-wide text-gray-400 uppercase">Tricks needed:</div>
+                  <div className={`text-[13px] text-gray-800 ${tricksNeeded < 0 ? 'text-red-500' : ''}`}>
                     {tricksNeededStr}
                   </div>
                 </div>
 
-                <div className="bp-section">
-                  <div className="bp-section-label">Trick so far:</div>
-                  <div className="bp-card-row">
+                <div className="flex flex-col gap-1.5">
+                  <div className="text-[11px] font-semibold tracking-wide text-gray-400 uppercase">Trick so far:</div>
+                  <div className="flex flex-wrap gap-1.5">
                     {insight.cardsPlayedSoFar.map(c => (
                       <MiniCard key={c.id} card={c} />
                     ))}
                     {insight.cardsPlayedSoFar.length === 0 && (
-                      <span className="bp-muted">No cards played yet (leading)</span>
+                      <span className="text-xs italic text-gray-300">No cards played yet (leading)</span>
                     )}
                   </div>
                 </div>
 
-                <div className="bp-section">
-                  <div className="bp-section-label">Players left to play:</div>
-                  <div className="bp-value">{insight.playersLeft}</div>
+                <div className="flex flex-col gap-1.5">
+                  <div className="text-[11px] font-semibold tracking-wide text-gray-400 uppercase">Players left to play:</div>
+                  <div className="text-[13px] text-gray-800">{insight.playersLeft}</div>
                 </div>
 
-                <div className="bp-section">
-                  <div className="bp-section-label">Best plays:</div>
-                  <div className="bp-choices">
+                <div className="flex flex-col gap-1.5">
+                  <div className="text-[11px] font-semibold tracking-wide text-gray-400 uppercase">Best plays:</div>
+                  <div className="flex flex-col gap-1.5">
                     {insight.bestPlays.map((tc, i) => {
                       const isChosen = tc.card.id === insight.chosenCard.id;
                       return (
-                        <div key={i} className={`bp-choice ${isChosen ? 'bp-choice-chosen' : ''}`}>
-                          <span className="bp-choice-rank">{i + 1}.</span>
+                        <div
+                          key={i}
+                          className={`flex items-center gap-2.5 rounded border px-2.5 py-1.5 ${
+                            isChosen ? 'border-blue-200 bg-blue-50' : 'border-gray-100 bg-gray-50'
+                          }`}
+                        >
+                          <span className="w-4 text-xs font-semibold text-gray-400">{i + 1}.</span>
                           <MiniCard card={tc.card} />
-                          <span className="bp-choice-score">
+                          <span className="ml-auto text-xs font-semibold text-gray-500">
                             {(tc.score * 100).toFixed(0)}%
                           </span>
-                          <span className={`bp-will-win ${tc.willWin ? 'bp-will-win-pos' : 'bp-will-win-neg'}`}>
+                          <span
+                            className={`rounded px-1 py-px text-[10px] font-bold ${
+                              tc.willWin
+                                ? 'bg-green-100 text-green-600'
+                                : 'bg-red-100 text-red-500'
+                            }`}
+                          >
                             {tc.willWin ? 'WINNING' : 'LOSING'}
                           </span>
-                          {isChosen && <span className="bp-chosen-badge">chosen</span>}
+                          {isChosen && <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold text-blue-600">chosen</span>}
                         </div>
                       );
                     })}
@@ -136,9 +160,9 @@ export function BrainPanel({ player, insights, defaultTab, onClose }: Props) {
                 </div>
 
                 {insight.completedTrick && (
-                  <div className="bp-section">
-                    <div className="bp-section-label">Completed trick:</div>
-                    <div className="bp-card-row">
+                  <div className="flex flex-col gap-1.5">
+                    <div className="text-[11px] font-semibold tracking-wide text-gray-400 uppercase">Completed trick:</div>
+                    <div className="flex flex-wrap gap-1.5">
                       {insight.completedTrick.map(c => (
                         <MiniCard key={c.id} card={c} highlight={c.id === insight.chosenCard.id} />
                       ))}

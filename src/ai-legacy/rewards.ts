@@ -222,14 +222,14 @@ function findCompletedTrick(trickIndex: number, state: GameState): Card[] | null
   for (let i = 0; i <= trickIndex; i++) {
     if (state.trickWinners[i] === winnerId) tricksWonBy++;
   }
-  return player.tricks[tricksWonBy - 1] ?? null;
+  return player.tricks[tricksWonBy - 1]?.cards ?? null;
 }
 
 function collectAllCardsForRound(state: GameState): Card[] {
   const cards: Card[] = [];
   for (const p of state.players) {
     for (const trick of p.tricks) {
-      cards.push(...trick);
+      cards.push(...trick.cards);
     }
   }
   if (state.flippedCard) cards.push(state.flippedCard);

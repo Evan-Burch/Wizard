@@ -13,7 +13,7 @@ export interface AIContext {
   cardsPlayed: Card[];
   tricksPlayed: number;
   cardsPerPlayer: number;
-  position: 'bottom' | 'right' | 'top' | 'left';
+  position: string;
 }
 
 export interface CardScore {
